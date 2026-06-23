@@ -1,0 +1,178 @@
+import React, { useState, useEffect } from "react";
+import { Spreadsheet, ChatMessage } from "./types";
+import { DEFAULT_SPREADSHEETS } from "./data/defaultSheets";
+import SpreadsheetImport from "./components/SpreadsheetImport";
+import SpreadsheetViewer from "./components/SpreadsheetViewer";
+import ChatInterface from "./components/ChatInterface";
+import { 
+  FileSpreadsheet, 
+  Layers, 
+  Database, 
+  Key, 
+  Bot, 
+  MessageSquare, 
+  Table, 
+  RotateCcw, 
+  Info,
+} from "lucide-react";
+
+export default function App() {
+  const [spreadsheets, setSpreadsheets] = useState<Spreadsheet[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeTab, setActiveTab] = useState<"chat" | "table">("chat");
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("sheet_assistant_spreadsheets");
+    if (saved) {
+      try {
+        setSpreadsheets(JSON.parse(saved));
+      } catch (err) {
+        console.error("Erro ao carregar do cache local:", err);
+        setSpreadsheets(DEFAULT_SPREADSHEETS);
+      }
+    } else {
+      setSpreadsheets(DEFAULT_SPREADSHEETS);
+      localStorage.setItem("sheet_assistant_spreadsheets", JSON.stringify(DEFAULT_SPREADSHEETS));
+    }
+  }, []);
+
+  const saveSpreadsheets = (updated: Spreadsheet[]) => {
+    setSpreadsheets(updated);
+    localStorage.setItem("sheet_assistant_spreadsheets", JSON.stringify(updated));
+  };
+
+  const handleImportSpreadsheet = (newSheet: Spreadsheet) => {
+    const updated = [newSheet, ...spreadsheets];
+    saveSpreadsheets(updated);
+  };
+
+  const handleDeleteSpreadsheet = (id: string) => {
+    const updated = spreadsheets.filter((s) => s.id !== id);
+    saveSpreadsheets(updated);
+  };
+
+  const handleUpdateSpreadsheet = (updatedSheet: Spreadsheet) => {
+    const updated = spreadsheets.map((s) => s.id === updatedSheet.id ? updatedSheet : s);
+    saveSpreadsheets(updated);
+  };
+
+  const handleResetDefaults = () => {
+    if (confirm("Deseja restaurar as planilhas de demonstração? Seus dados atuais serão mantidos junto com os novos.")) {
+      const merged = [...DEFAULT_SPREADSHEETS, ...spreadsheets.filter(s => !DEFAULT_SPREADSHEETS.some(df => df.id === s.id))];
+      saveSpreadsheets(merged);
+    }
+  };
+
+  const handleClearHistory = () => {
+    setMessages([]);
+    setErrorMessage(null);
+  };
+
+  const handleSendMessage = async (text: string) => {
+    const userMsg: ChatMessage = {
+      id: `msg-${Date.now()}-user`,
+      role: "user",
+      content: text,
+      timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+    };
+
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
+    setIsGenerating(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          message: text,
+          history: messages,
+          sheets: spreadsheets
+        })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Algo deu errado durante a consulta.");
+      }
+
+      const assistantMsg: ChatMessage = {
+        id: `msg-${Date.now()}-bot`,
+        role: "assistant",
+        content: data.reply,
+        timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      };
+
+      setMessages((prev) => [...prev, assistantMsg]);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err.message || "Erro de conexão ao servidor.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const totalSheets = spreadsheets.length;
+  const totalTabs = spreadsheets.reduce((acc, s) => acc + s.tabs.length, 0);
+  const totalRecords = spreadsheets.reduce(
+    (acc, s) => acc + s.tabs.reduce((innerAcc, t) => innerAcc + t.rows.length, 0),
+    0
+  );
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] text-slate-800 font-sans">
+      <header className="bg-white border-b border-slate-100 h-16 flex items-center justify-between px-6">
+        <div className="flex items-center gap-3">
+          <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
+          <h1 className="text-base font-bold text-slate-900 font-display">Consulta de Planilhas</h1>
+        </div>
+        <button onClick={handleResetDefaults} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition">
+          Restaurar Exemplos
+        </button>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white p-4 border border-slate-100 rounded-xl">Planilhas: {totalSheets}</div>
+          <div className="bg-white p-4 border border-slate-100 rounded-xl">Abas: {totalTabs}</div>
+          <div className="bg-white p-4 border border-slate-100 rounded-xl">Registros: {totalRecords}</div>
+          <div className="bg-white p-4 border border-slate-100 rounded-xl">IA: Gemini 3.5 Active</div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-4 space-y-6">
+            <SpreadsheetImport onImport={handleImportSpreadsheet} />
+          </div>
+          <div className="lg:col-span-8 flex flex-col space-y-4">
+            <div className="flex bg-white p-1 rounded-xl border border-slate-100 self-start">
+              <button onClick={() => setActiveTab("chat")} className={`px-4 py-2 rounded-lg text-xs font-bold ${activeTab === "chat" ? "bg-emerald-600 text-white" : ""}`}>Chat</button>
+              <button onClick={() => setActiveTab("table")} className={`px-4 py-2 rounded-lg text-xs font-bold ${activeTab === "table" ? "bg-emerald-600 text-white" : ""}`}>Tabelas</button>
+            </div>
+            {activeTab === "chat" ? (
+              <ChatInterface
+                spreadsheets={spreadsheets}
+                messages={messages}
+                onSendMessage={handleSendMessage}
+                onClearHistory={handleClearHistory}
+                isGenerating={isGenerating}
+                errorMessage={errorMessage}
+              />
+            ) : (
+              <SpreadsheetViewer
+                spreadsheets={spreadsheets}
+                onDeleteSheet={handleDeleteSpreadsheet}
+                onUpdateSheet={handleUpdateSpreadsheet}
+              />
+            )}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
