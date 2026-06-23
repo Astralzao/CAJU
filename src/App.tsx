@@ -40,7 +40,7 @@ export default function App() {
     return localStorage.getItem("destine_google_sheet_url") || "";
   });
   const [customGoogleSheetTabs, setCustomGoogleSheetTabs] = useState<string>(() => {
-    return localStorage.getItem("destine_google_sheet_tabs") || "Geral,Protocolos_Saude,Fornecedores_Principais";
+    return localStorage.getItem("destine_google_sheet_tabs") || "";
   });
   
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -58,6 +58,8 @@ export default function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isVerifyingLogin, setIsVerifyingLogin] = useState<boolean>(false);
 
+  const [sheetError, setSheetError] = useState<string | null>(null);
+
   // Load spreadsheets from server
   const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string) => {
     try {
@@ -73,14 +75,22 @@ export default function App() {
       }
       
       const res = await fetch(queryUrl);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.spreadsheets) {
-          setSpreadsheets(data.spreadsheets);
-        }
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Erro ao carregar planilhas.");
       }
-    } catch (err) {
+
+      if (data.spreadsheets) {
+        setSpreadsheets(data.spreadsheets);
+        setSheetError(null);
+      }
+    } catch (err: any) {
       console.error("Erro ao carregar planilhas do servidor:", err);
+      setSheetError(err.message || "Erro desconhecido ao carregar planilhas.");
+      if (overrideUrl !== undefined) {
+        throw err;
+      }
     }
   };
 
@@ -132,11 +142,8 @@ export default function App() {
   }, [adminPassword]);
 
   const saveSpreadsheets = async (updated: Spreadsheet[]) => {
-    // Update local state optimistically
-    setSpreadsheets(updated);
-
     try {
-      const res = await fetch("/api/spreadsheets", {
+      await fetch("/api/spreadsheets", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -144,29 +151,26 @@ export default function App() {
         },
         body: JSON.stringify({ spreadsheets: updated })
       });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Erro ao salvar planilhas.");
-      }
     } catch (err: any) {
       console.error("Erro de sincronização de dados:", err);
-      alert("Erro ao sincronizar dados com o servidor: " + err.message);
-      fetchSpreadsheets(); // Rollback to server-side truth
     }
   };
 
   const handleImportSpreadsheet = (newSheet: Spreadsheet) => {
     const updated = [newSheet, ...spreadsheets];
+    setSpreadsheets(updated);
     saveSpreadsheets(updated);
   };
 
   const handleDeleteSpreadsheet = (id: string) => {
     const updated = spreadsheets.filter((s) => s.id !== id);
+    setSpreadsheets(updated);
     saveSpreadsheets(updated);
   };
 
   const handleUpdateSpreadsheet = (updatedSheet: Spreadsheet) => {
     const updated = spreadsheets.map((s) => s.id === updatedSheet.id ? updatedSheet : s);
+    setSpreadsheets(updated);
     saveSpreadsheets(updated);
   };
 
@@ -181,7 +185,7 @@ export default function App() {
         });
         if (res.ok) {
           const data = await res.json();
-          setSpreadsheets(data.spreadsheets);
+          setSpreadsheets(data.spreadsheets || []);
           alert("Demonstração restaurada com sucesso!");
         } else {
           const data = await res.json();
@@ -222,7 +226,8 @@ export default function App() {
           history: messages,
           customApiKey: geminiApiKey,
           customGoogleSheetUrl: customGoogleSheetUrl,
-          customGoogleSheetTabs: customGoogleSheetTabs
+          customGoogleSheetTabs: customGoogleSheetTabs,
+          clientSpreadsheets: spreadsheets
         })
       });
 
@@ -433,6 +438,16 @@ export default function App() {
               {activeAdminTab === "upload" && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   
+                  {sheetError && (
+                    <div className="lg:col-span-12 bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex items-start gap-3 text-rose-200">
+                      <BadgeAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                      <div className="text-xs space-y-1">
+                        <p className="font-bold text-rose-400">Aviso de Sincronização:</p>
+                        <p className="leading-relaxed">{sheetError}</p>
+                      </div>
+                    </div>
+                  )}
+                  
                   {/* Upload drag drop zone */}
                   <div className="lg:col-span-5 space-y-6">
                     <SpreadsheetImport onImport={handleImportSpreadsheet} />
@@ -533,6 +548,16 @@ export default function App() {
                       Conecte e sincronize suas planilhas do Google Drive em tempo real. Os dados da planilha serão lidos de forma serverless, e as respostas do chat de IA serão atualizadas instantaneamente!
                     </p>
                   </div>
+
+                  {sheetError && (
+                    <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex items-start gap-3 text-rose-200">
+                      <BadgeAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                      <div className="text-xs space-y-1">
+                        <p className="font-bold text-rose-400">Erro de Sincronização:</p>
+                        <p className="leading-relaxed">{sheetError}</p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="p-4 bg-[#0B0616] rounded-xl border border-[#241B3E] space-y-4">
                     <div className="space-y-1">

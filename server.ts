@@ -58,21 +58,68 @@ function parseCSV(csvText: string): string[][] {
 
 async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promise<any[]> {
   const googleSheetUrl = customUrl || process.env.GOOGLE_SHEET_URL;
-  const googleSheetTabs = customTabs || process.env.GOOGLE_SHEET_TABS || "Geral,Protocolos_Saude,Fornecedores_Principais";
+  const googleSheetTabs = customTabs !== undefined ? customTabs : (process.env.GOOGLE_SHEET_TABS || "");
 
   if (googleSheetUrl) {
     try {
-      const sheetIdMatch = googleSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if (sheetIdMatch) {
-        const sheetId = sheetIdMatch[1];
-        const tabsList = googleSheetTabs.split(",").map(t => t.trim());
-        const fetchedTabs: any[] = [];
+      const isPublished = googleSheetUrl.includes("/d/e/");
+      let sheetId = "";
+      if (isPublished) {
+        // Web-published spreadsheet link
+        const match = googleSheetUrl.match(/\/d\/e\/([a-zA-Z0-9-_]+)/);
+        if (match) sheetId = match[1];
+      } else {
+        // Standard edit/view sharing link
+        const match = googleSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+        if (match) sheetId = match[1];
+      }
 
+      if (!sheetId) {
+        throw new Error("URL do Google Sheets inválida. Certifique-se de copiar o link completo do seu navegador.");
+      }
+
+      const tabsList = googleSheetTabs.split(",").map(t => t.trim()).filter(Boolean);
+      const fetchedTabs: any[] = [];
+      let htmlDetected = false;
+
+      if (tabsList.length > 0) {
         for (const tabName of tabsList) {
-          const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
-          const response = await fetch(exportUrl);
-          if (response.ok) {
-            const csvText = await response.text();
+          const exportUrls = [];
+          if (isPublished) {
+            exportUrls.push(`https://docs.google.com/spreadsheets/d/e/${sheetId}/pub?output=csv&sheet=${encodeURIComponent(tabName)}`);
+          } else {
+            // Standard sheet has several highly reliable endpoints:
+            // 1. Direct export using format=csv and sheet=...
+            exportUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&sheet=${encodeURIComponent(tabName)}`);
+            // 2. Visualization Query endpoint as a fallback for standard sheets
+            exportUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`);
+          }
+
+          let csvText = "";
+          let success = false;
+
+          for (const url of exportUrls) {
+            try {
+              const response = await fetch(url);
+              if (response.ok) {
+                const text = await response.text();
+                // If it returns HTML, it's likely a login/error/private page
+                if (text.trim().toLowerCase().startsWith("<!doctype html") || text.trim().toLowerCase().startsWith("<html")) {
+                  if (text.includes("Google Accounts") || text.includes("login") || text.includes("signin")) {
+                    htmlDetected = true;
+                  }
+                  continue;
+                }
+                csvText = text;
+                success = true;
+                break; // Found working URL for this tab
+              }
+            } catch (err) {
+              console.error(`Erro ao buscar aba ${tabName} via ${url}:`, err);
+            }
+          }
+
+          if (success && csvText) {
             const parsedLines = parseCSV(csvText);
             if (parsedLines.length > 0) {
               const headers = parsedLines[0].map((h: string) => h.trim());
@@ -92,23 +139,88 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
                 rows: rows
               });
             }
-          } else {
-            console.error(`Erro ao buscar aba ${tabName} do Google Sheets: ${response.statusText}`);
+          }
+        }
+      }
+
+      if (fetchedTabs.length > 0) {
+        return [{
+          id: "google-sheet",
+          name: "Planilha Integrada (Google Sheets)",
+          rawFileName: "Google Sheets Live",
+          updatedAt: new Date().toLocaleDateString("pt-BR"),
+          tabs: fetchedTabs
+        }];
+      } else {
+        // Fallback or default primary sheet download: Try published vs standard URLs
+        const fallbackUrls = [];
+        if (isPublished) {
+          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/e/${sheetId}/pub?output=csv`);
+        } else {
+          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
+          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`);
+        }
+
+        let csvTextFallback = "";
+        let fallbackSuccess = false;
+
+        for (const url of fallbackUrls) {
+          try {
+            const response = await fetch(url);
+            if (response.ok) {
+              const text = await response.text();
+              if (text.trim().toLowerCase().startsWith("<!doctype html") || text.trim().toLowerCase().startsWith("<html")) {
+                if (text.includes("Google Accounts") || text.includes("login") || text.includes("signin")) {
+                  htmlDetected = true;
+                }
+                continue;
+              }
+              csvTextFallback = text;
+              fallbackSuccess = true;
+              break;
+            }
+          } catch (err) {
+            console.error(`Erro no fallback do Google Sheets via ${url}:`, err);
           }
         }
 
-        if (fetchedTabs.length > 0) {
-          return [{
-            id: "google-sheet",
-            name: "Planilha Integrada (Google Sheets)",
-            rawFileName: "Google Sheets Live",
-            updatedAt: new Date().toLocaleDateString("pt-BR"),
-            tabs: fetchedTabs
-          }];
+        if (fallbackSuccess && csvTextFallback) {
+          const parsedLines = parseCSV(csvTextFallback);
+          if (parsedLines.length > 0) {
+            const headers = parsedLines[0].map((h: string) => h.trim());
+            const rows = parsedLines.slice(1).map((rowArr: string[]) => {
+              const rowObj: any = {};
+              headers.forEach((header: string, index: number) => {
+                if (header) {
+                  rowObj[header] = rowArr[index] !== undefined ? rowArr[index].trim() : "";
+                }
+              });
+              return rowObj;
+            }).filter(row => Object.values(row).some(val => val !== ""));
+
+            return [{
+              id: "google-sheet",
+              name: "Planilha Integrada (Google Sheets)",
+              rawFileName: "Google Sheets Live (Principal)",
+              updatedAt: new Date().toLocaleDateString("pt-BR"),
+              tabs: [{
+                name: "Principal",
+                headers: headers.filter((h: string) => h !== ""),
+                rows: rows
+              }]
+            }];
+          }
         }
+
+        if (htmlDetected) {
+          throw new Error("A planilha do Google Sheets parece estar PRIVADA ou restrita. No Google Sheets, clique em 'Compartilhar' no topo direito, altere o 'Acesso geral' de 'Restrito' para 'Qualquer pessoa com o link' (como Leitor), salve e tente novamente!");
+        }
+
+        throw new Error(`Não conseguimos ler nenhuma aba com os nomes fornecidos ("${googleSheetTabs || 'Principal'}"). Verifique se o nome das abas em sua planilha é idêntico e se as configurações de compartilhamento permitem acesso público.`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao carregar dados do Google Sheets:", err);
+      throw err;
     }
   }
 
@@ -210,8 +322,12 @@ app.get("/api/spreadsheets", async (req: Request, res: Response) => {
   res.setHeader("Expires", "0");
   const customUrl = req.query.customUrl as string;
   const customTabs = req.query.customTabs as string;
-  const sheets = await loadSpreadsheets(customUrl, customTabs);
-  res.json({ spreadsheets: sheets });
+  try {
+    const sheets = await loadSpreadsheets(customUrl, customTabs);
+    res.json({ spreadsheets: sheets });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Erro desconhecido ao carregar planilhas." });
+  }
 });
 
 // Protected POST spreadsheets
@@ -235,7 +351,7 @@ app.post("/api/spreadsheets/reset", checkAdminAuth, (req: Request, res: Response
 // Query Endpoint for Sheet Chat
 app.post("/api/chat", async (req: Request, res: Response) => {
   try {
-    const { message, history, customApiKey, customGoogleSheetUrl, customGoogleSheetTabs } = req.body;
+    const { message, history, customApiKey, customGoogleSheetUrl, customGoogleSheetTabs, clientSpreadsheets } = req.body;
 
     if (!message) {
        res.status(400).json({ error: "Mensagem é obrigatória." });
@@ -260,7 +376,33 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         }
       }
     });
-    const sheets = await loadSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
+
+    let sheets: any[] = [];
+    let loadError: string | null = null;
+
+    try {
+      if (customGoogleSheetUrl) {
+        sheets = await loadSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
+      }
+    } catch (err: any) {
+      console.error("Erro ao carregar Google Sheets para o chat:", err);
+      loadError = err.message || "Erro desconhecido ao carregar planilha Google.";
+    }
+
+    // Merge client-sent uploaded spreadsheets
+    if (clientSpreadsheets && Array.isArray(clientSpreadsheets) && clientSpreadsheets.length > 0) {
+      const hasGoogleSheet = sheets.some((s: any) => s.id === "google-sheet");
+      const filteredClient = hasGoogleSheet
+        ? clientSpreadsheets.filter((s: any) => s.id !== "google-sheet")
+        : clientSpreadsheets;
+      sheets = [...sheets, ...filteredClient];
+    } else if (sheets.length === 0) {
+      // Fallback to server side loaded defaults if nothing else is active
+      try {
+        const serverSheets = await loadSpreadsheets();
+        sheets = [...sheets, ...serverSheets];
+      } catch (e) {}
+    }
 
     // 1. Format Sheet Data for the prompt context
     let sheetsContextText = "";
@@ -294,6 +436,10 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         }
         sheetsContextText += `------------------------------------\n\n`;
       });
+
+      if (loadError) {
+        sheetsContextText += `⚠️ AVISO DE SINAL: O usuário tentou sincronizar uma planilha remota do Google Sheets, mas ocorreu o seguinte erro: "${loadError}". Explique de forma amigável essa limitação caso ele pergunte por esses dados.\n\n`;
+      }
     } else {
       sheetsContextText = "Nenhuma planilha foi alimentada até o momento. O usuário ainda não carregou dados. Oriente-o com gentileza a carregar suas planilhas de contatos, escala ou contingência utilizando o painel lateral.";
     }

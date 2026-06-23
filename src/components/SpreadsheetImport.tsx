@@ -239,9 +239,15 @@ export default function SpreadsheetImport({ onImport }: SpreadsheetImportProps) 
     try {
       const res = await fetch(exportUrl);
       if (!res.ok) {
-        throw new Error("Não foi possível acessar a URL. Certifique-se de que a planilha está publicada na Web (Compartilhar -> Publicar na Web).");
+        throw new Error("Não foi possível acessar a URL. Certifique-se de que a planilha está compartilhada pública ou publicada na Web.");
       }
       const text = await res.text();
+      
+      // If the response is HTML, it means Google is redirecting us to a login page (restricted sheet)
+      if (text.trim().toLowerCase().startsWith("<!doctype html") || text.trim().toLowerCase().startsWith("<html")) {
+        throw new Error("Acesso negado à planilha. A planilha parece estar privada ou restrita. Por favor, vá no Google Sheets, clique em 'Compartilhar' no topo direito e mude o acesso geral para 'Qualquer pessoa com o link pode ler' (Leitor), ou utilize 'Arquivo' -> 'Compartilhar' -> 'Publicar na Web' (como CSV).");
+      }
+      
       const tab = parseCsvText("Sheet1", text);
       
       const fallbackName = `Sheets Google (${new Date().toLocaleDateString("pt-BR")})`;
