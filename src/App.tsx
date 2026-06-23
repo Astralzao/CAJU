@@ -18,7 +18,9 @@ import {
   Sparkle,
   Phone,
   FileText,
-  BadgeAlert
+  BadgeAlert,
+  Key,
+  RefreshCw
 } from "lucide-react";
 
 export default function App() {
@@ -26,7 +28,20 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   
   // Tab control for the main Workspace
-  const [activeAdminTab, setActiveAdminTab] = useState<"upload" | "tables">("upload");
+  const [activeAdminTab, setActiveAdminTab] = useState<"upload" | "tables" | "config" >("upload");
+  
+  // Custom Gemini API Key state
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem("destine_gemini_api_key") || "";
+  });
+  
+  // Custom Google Sheet URL and Tab lists
+  const [customGoogleSheetUrl, setCustomGoogleSheetUrl] = useState<string>(() => {
+    return localStorage.getItem("destine_google_sheet_url") || "";
+  });
+  const [customGoogleSheetTabs, setCustomGoogleSheetTabs] = useState<string>(() => {
+    return localStorage.getItem("destine_google_sheet_tabs") || "Geral,Protocolos_Saude,Fornecedores_Principais";
+  });
   
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -35,25 +50,109 @@ export default function App() {
   const [isWidgetOpen, setIsWidgetOpen] = useState<boolean>(true);
   const [widgetInput, setWidgetInput] = useState<string>("");
 
-  // Initialize and load from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem("sheet_assistant_spreadsheets");
-    if (saved) {
-      try {
-        setSpreadsheets(JSON.parse(saved));
-      } catch (err) {
-        console.error("Erro ao carregar do cache local:", err);
-        setSpreadsheets(DEFAULT_SPREADSHEETS);
-      }
-    } else {
-      setSpreadsheets(DEFAULT_SPREADSHEETS);
-      localStorage.setItem("sheet_assistant_spreadsheets", JSON.stringify(DEFAULT_SPREADSHEETS));
-    }
-  }, []);
+  // Admin password states
+  const [adminPassword, setAdminPassword] = useState<string>(() => {
+    return localStorage.getItem("destine_staff_password") || "";
+  });
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isVerifyingLogin, setIsVerifyingLogin] = useState<boolean>(false);
 
-  const saveSpreadsheets = (updated: Spreadsheet[]) => {
+  // Load spreadsheets from server
+  const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string) => {
+    try {
+      const activeUrl = overrideUrl !== undefined ? overrideUrl : customGoogleSheetUrl;
+      const activeTabs = overrideTabs !== undefined ? overrideTabs : customGoogleSheetTabs;
+      
+      let queryUrl = `/api/spreadsheets?t=${Date.now()}`;
+      if (activeUrl) {
+        queryUrl += `&customUrl=${encodeURIComponent(activeUrl)}`;
+      }
+      if (activeTabs) {
+        queryUrl += `&customTabs=${encodeURIComponent(activeTabs)}`;
+      }
+      
+      const res = await fetch(queryUrl);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.spreadsheets) {
+          setSpreadsheets(data.spreadsheets);
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao carregar planilhas do servidor:", err);
+    }
+  };
+
+  const handleAdminLogin = async (password: string) => {
+    setIsVerifyingLogin(true);
+    setLoginError(null);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsAdminLoggedIn(true);
+        setAdminPassword(password);
+        localStorage.setItem("destine_staff_password", password);
+      } else {
+        setLoginError(data.error || "Senha incorreta.");
+        setIsAdminLoggedIn(false);
+      }
+    } catch (err) {
+      setLoginError("Erro ao conectar com o servidor.");
+      setIsAdminLoggedIn(false);
+    } finally {
+      setIsVerifyingLogin(false);
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdminLoggedIn(false);
+    setAdminPassword("");
+    localStorage.removeItem("destine_staff_password");
+  };
+
+  useEffect(() => {
+    fetchSpreadsheets();
+    
+    // Poll the server for the latest spreadsheets every 5 seconds to sync all visitors automatically
+    const interval = setInterval(() => {
+      fetchSpreadsheets();
+    }, 5000);
+
+    if (adminPassword) {
+      handleAdminLogin(adminPassword);
+    }
+
+    return () => clearInterval(interval);
+  }, [adminPassword]);
+
+  const saveSpreadsheets = async (updated: Spreadsheet[]) => {
+    // Update local state optimistically
     setSpreadsheets(updated);
-    localStorage.setItem("sheet_assistant_spreadsheets", JSON.stringify(updated));
+
+    try {
+      const res = await fetch("/api/spreadsheets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${adminPassword}`
+        },
+        body: JSON.stringify({ spreadsheets: updated })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Erro ao salvar planilhas.");
+      }
+    } catch (err: any) {
+      console.error("Erro de sincronização de dados:", err);
+      alert("Erro ao sincronizar dados com o servidor: " + err.message);
+      fetchSpreadsheets(); // Rollback to server-side truth
+    }
   };
 
   const handleImportSpreadsheet = (newSheet: Spreadsheet) => {
@@ -71,10 +170,26 @@ export default function App() {
     saveSpreadsheets(updated);
   };
 
-  const handleResetDefaults = () => {
-    if (confirm("Deseja restaurar as planilhas de demonstração? Seus dados atuais serão mantidos junto com os novos.")) {
-      const merged = [...DEFAULT_SPREADSHEETS, ...spreadsheets.filter(s => !DEFAULT_SPREADSHEETS.some(df => df.id === s.id))];
-      saveSpreadsheets(merged);
+  const handleResetDefaults = async () => {
+    if (confirm("Deseja restaurar as planilhas de demonstração? Isso substituirá as modificações atuais pelas planilhas padrão.")) {
+      try {
+        const res = await fetch("/api/spreadsheets/reset", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${adminPassword}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSpreadsheets(data.spreadsheets);
+          alert("Demonstração restaurada com sucesso!");
+        } else {
+          const data = await res.json();
+          alert("Erro ao restaurar: " + data.error);
+        }
+      } catch (err: any) {
+        alert("Erro de conexão ao restaurar: " + err.message);
+      }
     }
   };
 
@@ -105,7 +220,9 @@ export default function App() {
         body: JSON.stringify({
           message: text,
           history: messages,
-          sheets: spreadsheets
+          customApiKey: geminiApiKey,
+          customGoogleSheetUrl: customGoogleSheetUrl,
+          customGoogleSheetTabs: customGoogleSheetTabs
         })
       });
 
@@ -183,20 +300,24 @@ export default function App() {
         <div className="p-4 border-t border-[#241B3E]/60 bg-[#0E0B1B]/80 flex items-center justify-between">
           <div className="flex flex-col min-w-0">
             <span className="text-xs font-bold text-white truncate" title="luismariofilho@gmail.com">
-              luismariofilho@gmail.com
+              {isAdminLoggedIn ? "luismariofilho@gmail.com" : "Visitante Anônimo"}
             </span>
-            <span className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-              Administrador / Staff
+            <span className={`text-[9px] font-extrabold uppercase mt-0.5 px-2 py-0.5 rounded-full w-fit ${
+              isAdminLoggedIn ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
+            }`}>
+              {isAdminLoggedIn ? "Staff Autenticado" : "Acesso Visitante"}
             </span>
           </div>
           
-          <button 
-            onClick={() => alert("Simulando desautenticação do Portal do Staff.")}
-            className="p-1 px-2.5 text-zinc-500 hover:text-rose-400 transition cursor-pointer"
-            title="Sair do Portal"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          {isAdminLoggedIn && (
+            <button 
+              onClick={handleAdminLogout}
+              className="p-1 px-2.5 text-zinc-500 hover:text-rose-400 transition cursor-pointer"
+              title="Sair do Portal"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
       </aside>
@@ -207,139 +328,334 @@ export default function App() {
         {/* VIEW: THE EXPERT IA BASE WORKSPACE (UPLOAD, TABLE BUILDERS & REVOLUTIONARY LOVABLE GUIDE) */}
         <div className="p-6 md:p-8 space-y-6 overflow-y-auto max-h-screen">
           
-          {/* Tab header */}
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1">
-                <Bot className="w-3.5 h-3.5" /> Workspace de Alimentação Automatizada
-              </span>
-              <h2 className="text-2xl font-black text-white tracking-tight mt-1">Sincronizador de Dados Gemini</h2>
-              <p className="text-xs text-zinc-400 mt-1">Carregue novos manuais, contatos de conselheiros e rotas médicas instantaneamente para a IA.</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleResetDefaults}
-                className="px-3.5 py-1.5 bg-[#120D23] hover:bg-[#1E1639] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-[#241B3E] transition"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-[#D946EF]" /> Restaurar Demonstração
-              </button>
-            </div>
-          </div>
-
-          {/* Upper Workspace Switcher inside page */}
-          <div className="flex bg-[#0E0B1B] p-1 rounded-xl border border-[#241B3E] self-start w-fit">
-            <button
-              onClick={() => setActiveAdminTab("upload")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeAdminTab === "upload" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              1. Upload de Novas Planilhas
-            </button>
-            <button
-              onClick={() => setActiveAdminTab("tables")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeAdminTab === "tables" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              2. Visualizar & Editar Tabelas ({totalSheets})
-            </button>
-          </div>
-
-          {/* TAB CONTENT A: UPLOAD INTERFACES */}
-          {activeAdminTab === "upload" && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {!isAdminLoggedIn ? (
+            <div className="flex flex-col items-center justify-center py-20 px-4 max-w-md mx-auto text-center space-y-6" id="auth-gate-box">
+              <div className="w-16 h-16 rounded-full bg-pink-500/10 flex items-center justify-center border border-pink-500/30 shadow-[0_0_20px_rgba(217,70,239,0.15)] animate-pulse">
+                <Database className="w-8 h-8 text-[#D946EF]" />
+              </div>
               
-              {/* Upload drag drop zone */}
-              <div className="lg:col-span-5 space-y-6">
-                <SpreadsheetImport onImport={handleImportSpreadsheet} />
-                
-                {/* Local Info panel */}
-                <div className="bg-[#120D23] border border-[#241B3E] p-5 rounded-2xl space-y-3">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                    <Database className="w-4 h-4 text-emerald-400" />
-                    Status do Banco Local (RAG)
-                  </h3>
-                  <div className="grid grid-cols-2 gap-3 text-center">
-                    <div className="p-3 bg-[#0B0616] rounded-xl border border-[#241B3E]">
-                      <span className="text-[10px] text-zinc-500 font-bold block uppercase">Arquivos ativos</span>
-                      <span className="text-xl font-bold text-white">{totalSheets}</span>
-                    </div>
-                    <div className="p-3 bg-[#0B0616] rounded-xl border border-[#241B3E]">
-                      <span className="text-[10px] text-zinc-500 font-bold block uppercase">Registros totais</span>
-                      <span className="text-xl font-bold text-emerald-400">{totalRecords}</span>
-                    </div>
+              <div>
+                <h3 className="text-lg font-black text-white tracking-tight uppercase font-display">Portal do Staff • Acesso Restrito</h3>
+                <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
+                  O carregamento e edição de planilhas de contingência, conselheiros e manuais de emergência são restritos a organizadores credenciados do evento.
+                </p>
+              </div>
+
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  const pass = fd.get("password") as string;
+                  if (pass.trim()) {
+                    handleAdminLogin(pass);
+                  }
+                }}
+                className="w-full space-y-3"
+              >
+                <div className="space-y-1 text-left">
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest pl-1">Senha do Staff</label>
+                  <input
+                    type="password"
+                    name="password"
+                    placeholder="Digite a senha..."
+                    className="w-full bg-[#120D23] rounded-xl px-4 py-3 text-xs border border-[#241B3E] text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#D946EF] focus:border-[#D946EF] transition"
+                  />
+                  <p className="text-[10px] text-zinc-500 italic mt-1.5 pl-1">Dica de desenvolvimento: a senha padrão é <strong className="text-[#D946EF]">destine26</strong></p>
+                </div>
+
+                {loginError && (
+                  <div className="p-3 bg-rose-950/40 border border-rose-900/60 rounded-xl text-[11px] text-rose-300 text-left flex items-start gap-2 animate-bounce">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{loginError}</span>
                   </div>
-                  <p className="text-[11px] text-zinc-400 leading-relaxed pt-1">
-                    As planilhas carregadas são guardadas com segurança no <strong>localStorage</strong> de desenvolvimento do seu navegador. 
-                    O chat flutuante na direita lerá estas tabelas para responder as perguntas imediatamente.
-                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isVerifyingLogin}
+                  className="w-full py-3 bg-gradient-to-r from-pink-500 to-[#D946EF] hover:opacity-95 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition disabled:opacity-50"
+                >
+                  {isVerifyingLogin ? "Verificando Credenciais..." : "Autenticar no Portal"}
+                </button>
+              </form>
+            </div>
+          ) : (
+            <>
+              {/* Tab header */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1">
+                    <Bot className="w-3.5 h-3.5" /> Workspace de Alimentação Automatizada
+                  </span>
+                  <h2 className="text-2xl font-black text-white tracking-tight mt-1">Sincronizador de Dados Gemini</h2>
+                  <p className="text-xs text-zinc-400 mt-1">Carregue novos manuais, contatos de conselheiros e rotas médicas instantaneamente para a IA.</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleResetDefaults}
+                    className="px-3.5 py-1.5 bg-[#120D23] hover:bg-[#1E1639] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-[#241B3E] transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-[#D946EF]" /> Restaurar Demonstração
+                  </button>
                 </div>
               </div>
 
-              {/* Loaded list */}
-              <div className="lg:col-span-7 bg-[#120D23] border border-[#241B3E] rounded-2xl p-6 space-y-4">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Planilhas na Base Contextual da IA</h3>
-                
-                {spreadsheets.length > 0 ? (
-                  <div className="space-y-3.5">
-                    {spreadsheets.map((sheet) => (
-                      <div key={sheet.id} className="p-4 bg-[#0B0616] border border-[#241B3E] rounded-xl flex items-center justify-between hover:border-emerald-500/20 transition">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shrink-0">
-                            <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-white leading-snug">{sheet.name}</h4>
-                            <p className="text-[10px] text-zinc-500 mt-0.5">
-                              {sheet.rawFileName} — {sheet.tabs.reduce((sum, t) => sum + t.rows.length, 0)} registros em {sheet.tabs.length} abas
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => {
-                              setActiveAdminTab("tables");
-                            }}
-                            className="text-[11px] text-emerald-400 hover:underline font-bold"
-                          >
-                            Inspecionar
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSpreadsheet(sheet.id)}
-                            className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/5 rounded transition cursor-pointer"
-                            title="Remover fonte"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-zinc-500 text-xs italic">
-                    Nenhuma planilha ativa. Faça upload de arquivos acima ou clique em "Restaurar Demonstração" no topo para restaurar as planilhas padrão!
-                  </div>
-                )}
+              {/* Upper Workspace Switcher inside page */}
+              <div className="flex bg-[#0E0B1B] p-1 rounded-xl border border-[#241B3E] self-start w-fit flex-wrap gap-1">
+                <button
+                  onClick={() => setActiveAdminTab("upload")}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    activeAdminTab === "upload" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  1. Upload de Novas Planilhas
+                </button>
+                <button
+                  onClick={() => setActiveAdminTab("tables")}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    activeAdminTab === "tables" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  2. Visualizar & Editar Tabelas ({totalSheets})
+                </button>
+                <button
+                  onClick={() => setActiveAdminTab("config")}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    activeAdminTab === "config" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  3. Chave de API Gemini 🔑
+                </button>
               </div>
 
-            </div>
+              {/* TAB CONTENT A: UPLOAD INTERFACES */}
+              {activeAdminTab === "upload" && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  
+                  {/* Upload drag drop zone */}
+                  <div className="lg:col-span-5 space-y-6">
+                    <SpreadsheetImport onImport={handleImportSpreadsheet} />
+                    
+                    {/* Local Info panel */}
+                    <div className="bg-[#120D23] border border-[#241B3E] p-5 rounded-2xl space-y-3">
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        <Database className="w-4 h-4 text-emerald-400" />
+                        Status da Base Operacional
+                      </h3>
+                      <div className="grid grid-cols-2 gap-3 text-center">
+                        <div className="p-3 bg-[#0B0616] rounded-xl border border-[#241B3E]">
+                          <span className="text-[10px] text-zinc-500 font-bold block uppercase">Arquivos ativos</span>
+                          <span className="text-xl font-bold text-white">{totalSheets}</span>
+                        </div>
+                        <div className="p-3 bg-[#0B0616] rounded-xl border border-[#241B3E]">
+                          <span className="text-[10px] text-zinc-500 font-bold block uppercase">Registros totais</span>
+                          <span className="text-xl font-bold text-emerald-400">{totalRecords}</span>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed pt-1">
+                        As planilhas carregadas são sincronizadas e guardadas no servidor central, garantindo que qualquer membro do staff possa consultar os dados atualizados em tempo real através do chat flutuante!
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Loaded list */}
+                  <div className="lg:col-span-7 bg-[#120D23] border border-[#241B3E] rounded-2xl p-6 space-y-4">
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Planilhas na Base Contextual da IA</h3>
+                    
+                    {spreadsheets.length > 0 ? (
+                      <div className="space-y-3.5">
+                        {spreadsheets.map((sheet) => (
+                          <div key={sheet.id} className="p-4 bg-[#0B0616] border border-[#241B3E] rounded-xl flex items-center justify-between hover:border-emerald-500/20 transition">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shrink-0">
+                                <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                              </div>
+                              <div>
+                                <h4 className="text-xs font-bold text-white leading-snug">{sheet.name}</h4>
+                                <p className="text-[10px] text-zinc-500 mt-0.5">
+                                  {sheet.rawFileName} — {sheet.tabs.reduce((sum, t) => sum + t.rows.length, 0)} registros em {sheet.tabs.length} abas
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => {
+                                  setActiveAdminTab("tables");
+                                }}
+                                className="text-[11px] text-emerald-400 hover:underline font-bold"
+                              >
+                                Inspecionar
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSpreadsheet(sheet.id)}
+                                className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/5 rounded transition cursor-pointer"
+                                title="Remover fonte"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-zinc-500 text-xs italic">
+                        Nenhuma planilha ativa. Faça upload de arquivos acima ou clique em "Restaurar Demonstração" no topo para restaurar as planilhas padrão!
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
+
+              {/* TAB CONTENT B: DATABASE VIEWER */}
+              {activeAdminTab === "tables" && (
+                <div className="bg-[#120D23] border border-[#241B3E] rounded-2xl p-6 min-h-[500px]">
+                  <SpreadsheetViewer
+                    spreadsheets={spreadsheets}
+                    onDeleteSheet={handleDeleteSpreadsheet}
+                    onUpdateSheet={handleUpdateSpreadsheet}
+                  />
+                </div>
+              )}
+
+              {/* TAB CONTENT C: CONFIGURATIONS & GOOGLE SHEETS */}
+              {activeAdminTab === "config" && (
+                <div className="bg-[#120D23] border border-[#241B3E] rounded-2xl p-6 min-h-[400px] space-y-6 animate-fadeIn" id="api-key-config-tab">
+                  {/* Section 1: Google Sheets Integration */}
+                  <div>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      Integração de Planilhas Google (Google Sheets)
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Conecte e sincronize suas planilhas do Google Drive em tempo real. Os dados da planilha serão lidos de forma serverless, e as respostas do chat de IA serão atualizadas instantaneamente!
+                    </p>
+                  </div>
+
+                  <div className="p-4 bg-[#0B0616] rounded-xl border border-[#241B3E] space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">URL da Planilha Google (Compartilhada como "Qualquer pessoa com o link pode ler")</label>
+                      <input
+                        type="text"
+                        value={customGoogleSheetUrl}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomGoogleSheetUrl(val);
+                          localStorage.setItem("destine_google_sheet_url", val);
+                        }}
+                        placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                        className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Abas/Páginas a Carregar (Separadas por vírgula)</label>
+                        <input
+                          type="text"
+                          value={customGoogleSheetTabs}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCustomGoogleSheetTabs(val);
+                            localStorage.setItem("destine_google_sheet_tabs", val);
+                          }}
+                          placeholder="Geral, Protocolos_Saude, Fornecedores_Principais"
+                          className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          onClick={async () => {
+                            try {
+                              await fetchSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
+                              alert("Planilhas do Google Sheets importadas e sincronizadas com sucesso!");
+                            } catch (e: any) {
+                              alert("Erro ao sincronizar do Google Sheets: " + e.message);
+                            }
+                          }}
+                          className="w-full px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                        >
+                          <RefreshCw className="w-4 h-4 animate-spin-slow" />
+                          Salvar e Sincronizar Agora 🔄
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2.5 text-[11px] text-zinc-400 leading-relaxed bg-[#120D23]/50 p-3 rounded-lg border border-[#241B3E]">
+                      <span className="text-amber-400 font-bold shrink-0">💡 Como preparar sua planilha:</span>
+                      <div className="space-y-1 text-zinc-300">
+                        <p>1. No seu Google Sheets, clique no botão azul <strong>Compartilhar (Share)</strong> no canto superior direito.</p>
+                        <p>2. Mude o acesso geral para <strong>"Qualquer pessoa com o link" (Anyone with the link)</strong> como <strong>Leitor (Viewer)</strong>.</p>
+                        <p>3. Certifique-se de que os nomes das abas correspondem aos nomes listados acima (ex: <code className="text-emerald-400 bg-black/30 px-1 py-0.5 rounded">Geral</code>, <code className="text-emerald-400 bg-black/30 px-1 py-0.5 rounded">Protocolos_Saude</code>, etc).</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <hr className="border-[#241B3E]" />
+
+                  {/* Section 2: Gemini API Key */}
+                  <div>
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                      <Key className="w-4 h-4 text-[#D946EF]" />
+                      Configuração da Chave de API do Gemini
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Defina uma chave de API do Gemini personalizada para as consultas do chat de inteligência artificial. Esta chave será mantida com segurança apenas no seu navegador e anexada às suas solicitações.
+                    </p>
+                  </div>
+
+                  <div className="p-4 bg-[#0B0616] rounded-xl border border-[#241B3E] space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Chave de API Gemini (gsk-... ou AIzaSy...)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={geminiApiKey}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setGeminiApiKey(val);
+                            localStorage.setItem("destine_gemini_api_key", val);
+                          }}
+                          placeholder="Cole sua GEMINI_API_KEY aqui..."
+                          className="flex-1 bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
+                        />
+                        {geminiApiKey && (
+                          <button
+                            onClick={() => {
+                              setGeminiApiKey("");
+                              localStorage.removeItem("destine_gemini_api_key");
+                            }}
+                            className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs font-bold transition border border-rose-500/20 cursor-pointer"
+                          >
+                            Limpar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2.5 text-[11px] text-zinc-400 leading-relaxed bg-[#120D23]/50 p-3 rounded-lg border border-[#241B3E]">
+                      <span className="text-amber-400 font-bold shrink-0">💡 Nota:</span>
+                      <div>
+                        Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (<code className="text-emerald-400">process.env.GEMINI_API_KEY</code>). Caso queira usar sua própria conta do Google AI Studio para evitar limites de uso, informe a sua chave acima.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3.5 pt-2">
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Como obter uma Chave de API gratuita?</h4>
+                    <ol className="list-decimal list-inside text-xs text-zinc-400 space-y-2 leading-relaxed">
+                      <li>Acesse o console do <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-[#D946EF] hover:underline">Google AI Studio</a></li>
+                      <li>Clique em <strong>"Get API key"</strong> no menu superior</li>
+                      <li>Clique em <strong>"Create API key"</strong> e copie a chave gerada</li>
+                      <li>Cole a chave no campo acima para uso imediato no sistema!</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+            </>
           )}
-
-          {/* TAB CONTENT B: DATABASE VIEWER */}
-          {activeAdminTab === "tables" && (
-            <div className="bg-[#120D23] border border-[#241B3E] rounded-2xl p-6 min-h-[500px]">
-              <SpreadsheetViewer
-                spreadsheets={spreadsheets}
-                onDeleteSheet={handleDeleteSpreadsheet}
-                onUpdateSheet={handleUpdateSpreadsheet}
-              />
-            </div>
-          )}
-
-
 
         </div>
 

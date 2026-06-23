@@ -1,11 +1,153 @@
 import express, { Request, Response } from "express";
 import path from "path";
 import dotenv from "dotenv";
+import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets";
 
 // Load environment variables from .env
 dotenv.config();
+
+const DB_PATH = path.join(process.cwd(), "spreadsheets-db.json");
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "destine26";
+
+// Load / Save Helpers
+function parseCSV(csvText: string): string[][] {
+  const lines: string[][] = [];
+  let row: string[] = [];
+  let inQuotes = false;
+  let entry = "";
+  
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+    const nextChar = csvText[i + 1];
+    
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        entry += '"';
+        i++; // skip next quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      row.push(entry);
+      entry = "";
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++;
+      }
+      row.push(entry);
+      lines.push(row);
+      row = [];
+      entry = "";
+    } else {
+      entry += char;
+    }
+  }
+  
+  if (entry || row.length > 0) {
+    row.push(entry);
+    lines.push(row);
+  }
+  
+  return lines;
+}
+
+async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promise<any[]> {
+  const googleSheetUrl = customUrl || process.env.GOOGLE_SHEET_URL;
+  const googleSheetTabs = customTabs || process.env.GOOGLE_SHEET_TABS || "Geral,Protocolos_Saude,Fornecedores_Principais";
+
+  if (googleSheetUrl) {
+    try {
+      const sheetIdMatch = googleSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (sheetIdMatch) {
+        const sheetId = sheetIdMatch[1];
+        const tabsList = googleSheetTabs.split(",").map(t => t.trim());
+        const fetchedTabs: any[] = [];
+
+        for (const tabName of tabsList) {
+          const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+          const response = await fetch(exportUrl);
+          if (response.ok) {
+            const csvText = await response.text();
+            const parsedLines = parseCSV(csvText);
+            if (parsedLines.length > 0) {
+              const headers = parsedLines[0].map((h: string) => h.trim());
+              const rows = parsedLines.slice(1).map((rowArr: string[]) => {
+                const rowObj: any = {};
+                headers.forEach((header: string, index: number) => {
+                  if (header) {
+                    rowObj[header] = rowArr[index] !== undefined ? rowArr[index].trim() : "";
+                  }
+                });
+                return rowObj;
+              }).filter(row => Object.values(row).some(val => val !== ""));
+
+              fetchedTabs.push({
+                name: tabName,
+                headers: headers.filter((h: string) => h !== ""),
+                rows: rows
+              });
+            }
+          } else {
+            console.error(`Erro ao buscar aba ${tabName} do Google Sheets: ${response.statusText}`);
+          }
+        }
+
+        if (fetchedTabs.length > 0) {
+          return [{
+            id: "google-sheet",
+            name: "Planilha Integrada (Google Sheets)",
+            rawFileName: "Google Sheets Live",
+            updatedAt: new Date().toLocaleDateString("pt-BR"),
+            tabs: fetchedTabs
+          }];
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao carregar dados do Google Sheets:", err);
+    }
+  }
+
+  // Fallback to local file or default spreadsheets
+  try {
+    if (fs.existsSync(DB_PATH)) {
+      const data = fs.readFileSync(DB_PATH, "utf8");
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Erro ao ler banco de planilhas local, usando dados padrão:", err);
+  }
+
+  // Initialize with defaults and save
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_SPREADSHEETS, null, 2), "utf8");
+  } catch (err) {
+    console.error("Erro ao criar banco inicial com planilhas padrão:", err);
+  }
+  return DEFAULT_SPREADSHEETS;
+}
+
+function saveSpreadsheets(sheets: any[]) {
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(sheets, null, 2), "utf8");
+  } catch (err) {
+    console.error("Erro ao salvar planilhas no arquivo:", err);
+  }
+}
+
+// Authentication Middleware for Admins
+function checkAdminAuth(req: Request, res: Response, next: () => void) {
+  const authHeader = req.headers.authorization;
+  const password = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
+  
+  if (password === ADMIN_PASSWORD) {
+    next();
+  } else {
+    res.status(401).json({ error: "Acesso restrito. Senha de administração incorreta ou ausente." });
+  }
+}
 
 // Ensure GEMINI_API_KEY is available or output a placeholder error
 const apiKey = process.env.GEMINI_API_KEY;
@@ -41,24 +183,74 @@ app.get("/api/health", (req: Request, res: Response) => {
   res.json({ status: "ok", mode: process.env.NODE_ENV || "development" });
 });
 
+// Authentication verify endpoint
+app.post("/api/auth", (req: Request, res: Response) => {
+  const { password } = req.body;
+  if (password === ADMIN_PASSWORD) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ success: false, error: "Senha de administração inválida." });
+  }
+});
+
+// Public GET spreadsheets
+app.get("/api/spreadsheets", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  const customUrl = req.query.customUrl as string;
+  const customTabs = req.query.customTabs as string;
+  const sheets = await loadSpreadsheets(customUrl, customTabs);
+  res.json({ spreadsheets: sheets });
+});
+
+// Protected POST spreadsheets
+app.post("/api/spreadsheets", checkAdminAuth, (req: Request, res: Response) => {
+  const { spreadsheets } = req.body;
+  if (!Array.isArray(spreadsheets)) {
+    res.status(400).json({ error: "O campo 'spreadsheets' deve ser uma lista válida." });
+    return;
+  }
+  saveSpreadsheets(spreadsheets);
+  res.json({ spreadsheets });
+});
+
+// Protected POST reset spreadsheets to defaults
+app.post("/api/spreadsheets/reset", checkAdminAuth, (req: Request, res: Response) => {
+  saveSpreadsheets(DEFAULT_SPREADSHEETS);
+  res.json({ spreadsheets: DEFAULT_SPREADSHEETS });
+});
+
+
 // Query Endpoint for Sheet Chat
 app.post("/api/chat", async (req: Request, res: Response) => {
   try {
-    const { message, history, sheets } = req.body;
+    const { message, history, customApiKey, customGoogleSheetUrl, customGoogleSheetTabs } = req.body;
 
     if (!message) {
        res.status(400).json({ error: "Mensagem é obrigatória." });
        return;
     }
 
-    if (!apiKey) {
-       res.status(500).json({ 
-        error: "GEMINI_API_KEY não configurada. Por favor, adicione sua chave de API nas configurações de Segredos (Secrets) do AI Studio." 
+    const activeApiKey = customApiKey || apiKey;
+
+    if (!activeApiKey) {
+       res.status(400).json({ 
+        error: "GEMINI_API_KEY não configurada. Por favor, adicione sua chave de API nas configurações ou use a opção de Chave de API Personalizada no painel." 
       });
       return;
     }
 
-    const ai = getGeminiClient();
+    // Initialize client for this request with the appropriate key
+    const ai = new GoogleGenAI({
+      apiKey: activeApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+    const sheets = await loadSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
 
     // 1. Format Sheet Data for the prompt context
     let sheetsContextText = "";
@@ -177,4 +369,8 @@ async function buildApp() {
   });
 }
 
-buildApp();
+if (process.env.VERCEL !== "1") {
+  buildApp();
+}
+
+export default app;
