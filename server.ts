@@ -3,7 +3,7 @@ import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
-import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets";
+import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 
 // Load environment variables from .env
 dotenv.config();
