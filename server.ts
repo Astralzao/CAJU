@@ -3,7 +3,6 @@ import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets";
 
 // Load environment variables from .env
@@ -11,6 +10,9 @@ dotenv.config();
 
 const DB_PATH = path.join(process.cwd(), "spreadsheets-db.json");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "destine26";
+
+// In-memory cache for Vercel/Serverless where file system is read-only
+let globalInMemorySpreadsheets: any[] | null = null;
 
 // Load / Save Helpers
 function parseCSV(csvText: string): string[][] {
@@ -110,11 +112,17 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
     }
   }
 
-  // Fallback to local file or default spreadsheets
+  // Fallback to in-memory, local file, or default spreadsheets
+  if (globalInMemorySpreadsheets) {
+    return globalInMemorySpreadsheets;
+  }
+
   try {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, "utf8");
-      return JSON.parse(data);
+      const sheets = JSON.parse(data);
+      globalInMemorySpreadsheets = sheets;
+      return sheets;
     }
   } catch (err) {
     console.error("Erro ao ler banco de planilhas local, usando dados padrão:", err);
@@ -124,16 +132,18 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_SPREADSHEETS, null, 2), "utf8");
   } catch (err) {
-    console.error("Erro ao criar banco inicial com planilhas padrão:", err);
+    console.error("Erro ao criar banco inicial com planilhas padrão (esperado em ambiente serverless):", err);
   }
+  globalInMemorySpreadsheets = DEFAULT_SPREADSHEETS;
   return DEFAULT_SPREADSHEETS;
 }
 
 function saveSpreadsheets(sheets: any[]) {
+  globalInMemorySpreadsheets = sheets;
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(sheets, null, 2), "utf8");
   } catch (err) {
-    console.error("Erro ao salvar planilhas no arquivo:", err);
+    console.error("Erro ao salvar planilhas no arquivo (esperado em ambiente serverless):", err);
   }
 }
 
@@ -349,6 +359,7 @@ Regras fundamentais de resposta:
 // Setup Vite Dev server or production static serving
 async function buildApp() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
