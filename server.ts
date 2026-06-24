@@ -8,25 +8,53 @@ import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 // Load environment variables from .env
 dotenv.config();
 
-const DB_PATH = path.join(process.cwd(), "spreadsheets-db.json");
-const CONFIG_PATH = path.join(process.cwd(), "config-db.json");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "destine26";
 
-// Load Google Sheet configuration from file or env variables
-let serverGoogleSheetConfig = {
-  url: process.env.GOOGLE_SHEET_URL || "",
-  tabs: process.env.GOOGLE_SHEET_TABS || ""
-};
-
-try {
-  if (fs.existsSync(CONFIG_PATH)) {
-    const savedConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    if (savedConfig.url !== undefined) serverGoogleSheetConfig.url = savedConfig.url;
-    if (savedConfig.tabs !== undefined) serverGoogleSheetConfig.tabs = savedConfig.tabs;
+function getWritablePath(filename: string): string {
+  const localPath = path.join(process.cwd(), filename);
+  try {
+    const testFile = path.join(process.cwd(), `.test-write-${Date.now()}`);
+    fs.writeFileSync(testFile, "test");
+    fs.unlinkSync(testFile);
+    return localPath;
+  } catch (e) {
+    return path.join("/tmp", filename);
   }
-} catch (err) {
-  console.error("Erro ao carregar configuração de planilhas do Google Sheets:", err);
 }
+
+const DB_PATH = getWritablePath("spreadsheets-db.json");
+const CONFIG_PATH = getWritablePath("config-db.json");
+
+// Load Google Sheet configuration from file or env variables
+function readConfig() {
+  const config = {
+    url: process.env.GOOGLE_SHEET_URL || "",
+    tabs: process.env.GOOGLE_SHEET_TABS || ""
+  };
+  
+  try {
+    // Try primary CONFIG_PATH (which might be in /tmp)
+    if (fs.existsSync(CONFIG_PATH)) {
+      const savedConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+      if (savedConfig.url !== undefined) config.url = savedConfig.url;
+      if (savedConfig.tabs !== undefined) config.tabs = savedConfig.tabs;
+      return config;
+    }
+    
+    // Fallback to local process.cwd() file if primary config isn't populated yet
+    const localConfigPath = path.join(process.cwd(), "config-db.json");
+    if (CONFIG_PATH !== localConfigPath && fs.existsSync(localConfigPath)) {
+      const savedConfig = JSON.parse(fs.readFileSync(localConfigPath, "utf8"));
+      if (savedConfig.url !== undefined) config.url = savedConfig.url;
+      if (savedConfig.tabs !== undefined) config.tabs = savedConfig.tabs;
+    }
+  } catch (err) {
+    console.error("Erro ao carregar configuração de planilhas do Google Sheets:", err);
+  }
+  return config;
+}
+
+let serverGoogleSheetConfig = readConfig();
 
 // In-memory cache for Vercel/Serverless where file system is read-only
 let globalInMemorySpreadsheets: any[] | null = null;
@@ -249,6 +277,15 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
   try {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, "utf8");
+      const sheets = JSON.parse(data);
+      globalInMemorySpreadsheets = sheets;
+      return sheets;
+    }
+    
+    // Fallback to local process.cwd() file if primary DB_PATH is in /tmp and doesn't exist yet
+    const localDbPath = path.join(process.cwd(), "spreadsheets-db.json");
+    if (DB_PATH !== localDbPath && fs.existsSync(localDbPath)) {
+      const data = fs.readFileSync(localDbPath, "utf8");
       const sheets = JSON.parse(data);
       globalInMemorySpreadsheets = sheets;
       return sheets;
