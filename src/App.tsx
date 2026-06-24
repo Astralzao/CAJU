@@ -12,6 +12,8 @@ import {
   Copy,
   Check,
   Sparkles,
+  Zap,
+  Cpu,
   Send,
   Trash2,
   LogOut,
@@ -30,9 +32,21 @@ export default function App() {
   // Tab control for the main Workspace
   const [activeAdminTab, setActiveAdminTab] = useState<"upload" | "tables" | "config" >("upload");
   
-  // Custom Gemini API Key state
+  // API Provider & Key states
+  const [apiProvider, setApiProvider] = useState<"gemini" | "groq" | "openai">(() => {
+    return (localStorage.getItem("destine_api_provider") as any) || "gemini";
+  });
+  const [apiModel, setApiModel] = useState<string>(() => {
+    return localStorage.getItem("destine_api_model") || "";
+  });
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
     return localStorage.getItem("destine_gemini_api_key") || "";
+  });
+  const [groqApiKey, setGroqApiKey] = useState<string>(() => {
+    return localStorage.getItem("destine_groq_api_key") || "";
+  });
+  const [openaiApiKey, setOpenaiApiKey] = useState<string>(() => {
+    return localStorage.getItem("destine_openai_api_key") || "";
   });
   
   // Custom Google Sheet URL and Tab lists
@@ -45,6 +59,15 @@ export default function App() {
   
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Check if the application is running in Embed Mode (Only Chat UI, no Admin/Config controls)
+  const [isEmbedMode] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("embed") === "true" || params.get("chat_only") === "true";
+    }
+    return false;
+  });
 
   // Floating Chat Widget state
   const [isWidgetOpen, setIsWidgetOpen] = useState<boolean>(true);
@@ -215,6 +238,12 @@ export default function App() {
     setIsGenerating(true);
     setErrorMessage(null);
 
+    // Get custom key based on current provider
+    const currentApiKey = 
+      apiProvider === "gemini" ? geminiApiKey :
+      apiProvider === "groq" ? groqApiKey :
+      openaiApiKey;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -224,7 +253,9 @@ export default function App() {
         body: JSON.stringify({
           message: text,
           history: messages,
-          customApiKey: geminiApiKey,
+          customApiKey: currentApiKey,
+          apiProvider: apiProvider,
+          apiModel: apiModel,
           customGoogleSheetUrl: customGoogleSheetUrl,
           customGoogleSheetTabs: customGoogleSheetTabs,
           clientSpreadsheets: spreadsheets
@@ -262,6 +293,136 @@ export default function App() {
     (acc, s) => acc + s.tabs.reduce((innerAcc, t) => innerAcc + t.rows.length, 0),
     0
   );
+
+  if (isEmbedMode) {
+    return (
+      <div className="w-full h-screen flex flex-col bg-[#0B0616] text-slate-100 font-sans antialiased overflow-hidden" id="embed-chat-root">
+        {/* Header */}
+        <div className="bg-[#120D23] border-b border-[#241B3E] p-4 flex items-center justify-between shadow-md shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 to-[#D946EF] flex items-center justify-center border border-pink-400/30 shadow-[0_0_15px_rgba(217,70,239,0.15)]">
+              <Bot className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-sm font-black text-white tracking-wide uppercase font-display flex items-center gap-1.5">
+                <span>Suporte Digital • DESTINE 26</span>
+                <Sparkle className="w-3.5 h-3.5 text-pink-400 fill-pink-400 animate-pulse" />
+              </h1>
+              <p className="text-[10px] text-zinc-400 flex items-center gap-1 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-pulse"></span>
+                Base Operacional Ativa • {totalSheets} Fontes Integradas
+              </p>
+            </div>
+          </div>
+
+          {messages.length > 0 && (
+            <button 
+              onClick={handleClearHistory}
+              className="text-[10px] text-zinc-400 hover:text-[#D946EF] bg-[#0B0616] border border-[#241B3E] hover:border-[#D946EF]/20 px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Limpar Histórico
+            </button>
+          )}
+        </div>
+
+        {/* Scrollable messages box */}
+        <div className="flex-1 p-4 md:p-6 overflow-y-auto space-y-4 bg-[#0B0616]" style={{ backgroundImage: "radial-gradient(circle at top right, rgba(217, 70, 239, 0.02) 0%, rgba(11, 6, 22, 0) 60%)" }}>
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center space-y-4 max-w-md mx-auto px-4">
+              <div className="w-16 h-16 rounded-2xl bg-pink-500/10 flex items-center justify-center border border-[#D946EF]/20 shadow-[0_0_20px_rgba(217,70,239,0.1)] animate-bounce">
+                <Bot className="w-8 h-8 text-[#D946EF]" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Como posso ajudar você hoje?</h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Consulte informações operacionais, horários de plantão, contatos de conselheiros e rotas médicas instantaneamente de forma segura.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 w-full pt-3">
+                <button 
+                  onClick={() => handleSendMessage("Quem é o conselheiro da Adm Consult e qual o contato dele?")}
+                  className="w-full text-left p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
+                >
+                  🏥 "Quem é o conselheiro da Adm Consult?"
+                </button>
+                <button 
+                  onClick={() => handleSendMessage("O que fazer em caso de congressista passando mal no Pavilhão A?")}
+                  className="w-full text-left p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
+                >
+                  🚨 "Congressista passando mal: qual protocolo?"
+                </button>
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div 
+                key={msg.id} 
+                className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
+              >
+                <span className="text-[9px] text-[#D946EF]/70 mb-1 px-1">{msg.role === "user" ? "Você" : "Assistente"} • {msg.timestamp}</span>
+                <div className={`p-3.5 rounded-2xl text-xs leading-relaxed max-w-[85%] md:max-w-[75%] ${
+                  msg.role === "user" 
+                    ? "bg-[#D946EF]/10 text-pink-200 border border-[#D946EF]/30 rounded-tr-none" 
+                    : "bg-[#120D23] border border-[#241B3E] text-zinc-200 rounded-tl-none shadow-sm"
+                }`}>
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              </div>
+            ))
+          )}
+
+          {isGenerating && (
+            <div className="flex items-center gap-2 text-[#D946EF] px-1 py-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-bounce"></div>
+              <div className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-bounce [animation-delay:0.2s]"></div>
+              <div className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-bounce [animation-delay:0.4s]"></div>
+              <span className="text-[9px] uppercase font-bold tracking-widest pl-1">Processando fontes integradas...</span>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="p-3 bg-rose-950/60 border border-rose-900 rounded-xl text-xs text-rose-300 flex items-start gap-2 max-w-xl">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Input box */}
+        <div className="p-4 bg-[#120D23] border-t border-[#241B3E] shrink-0">
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (widgetInput.trim() && !isGenerating) {
+                handleSendMessage(widgetInput);
+                setWidgetInput("");
+              }
+            }}
+            className="flex gap-2 max-w-4xl mx-auto"
+          >
+            <input
+              type="text"
+              value={widgetInput}
+              onChange={(e) => setWidgetInput(e.target.value)}
+              placeholder="Digite sua dúvida operacional aqui..."
+              disabled={isGenerating}
+              className="flex-1 bg-[#0B0616] rounded-xl px-4 py-3 text-xs border border-[#241B3E] text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#D946EF] focus:border-[#D946EF] transition"
+            />
+            <button
+              type="submit"
+              disabled={isGenerating || !widgetInput.trim()}
+              className="p-3 rounded-xl bg-gradient-to-r from-pink-500 to-[#D946EF] hover:opacity-90 text-slate-950 disabled:bg-slate-800 disabled:text-zinc-600 transition shrink-0 flex items-center justify-center cursor-pointer"
+            >
+              <Send className="w-4 h-4 text-white" />
+            </button>
+          </form>
+          <div className="text-center mt-2">
+            <span className="text-[9px] text-zinc-500">Destine 26 Intelligent System • Gemini/LLM Hybrid</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0B0616] text-slate-100 font-sans antialiased flex" id="app-root">
@@ -620,37 +781,120 @@ export default function App() {
 
                   <hr className="border-[#241B3E]" />
 
-                  {/* Section 2: Gemini API Key */}
+                  {/* Section 2: AI Provider Settings */}
                   <div>
                     <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
                       <Key className="w-4 h-4 text-[#D946EF]" />
-                      Configuração da Chave de API do Gemini
+                      Configuração do Provedor de IA
                     </h3>
                     <p className="text-xs text-zinc-400 mt-1">
-                      Defina uma chave de API do Gemini personalizada para as consultas do chat de inteligência artificial. Esta chave será mantida com segurança apenas no seu navegador e anexada às suas solicitações.
+                      Escolha o provedor de Inteligência Artificial desejado e configure as chaves de API correspondentes. Suas chaves são armazenadas com segurança localmente no seu navegador.
                     </p>
                   </div>
 
                   <div className="p-4 bg-[#0B0616] rounded-xl border border-[#241B3E] space-y-4">
+                    {/* Segmented control for Provider Selection */}
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Provedor Ativo</label>
+                      <div className="grid grid-cols-3 gap-2 bg-[#120D23] p-1 rounded-lg border border-[#241B3E]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setApiProvider("gemini");
+                            localStorage.setItem("destine_api_provider", "gemini");
+                          }}
+                          className={`py-1.5 rounded-md text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                            apiProvider === "gemini"
+                              ? "bg-gradient-to-r from-[#D946EF] to-pink-600 text-white shadow-sm"
+                              : "text-zinc-400 hover:text-white hover:bg-zinc-800/20"
+                          }`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Gemini
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setApiProvider("groq");
+                            localStorage.setItem("destine_api_provider", "groq");
+                          }}
+                          className={`py-1.5 rounded-md text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                            apiProvider === "groq"
+                              ? "bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-sm"
+                              : "text-zinc-400 hover:text-white hover:bg-zinc-800/20"
+                          }`}
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                          Groq
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setApiProvider("openai");
+                            localStorage.setItem("destine_api_provider", "openai");
+                          }}
+                          className={`py-1.5 rounded-md text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                            apiProvider === "openai"
+                              ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-sm"
+                              : "text-zinc-400 hover:text-white hover:bg-zinc-800/20"
+                          }`}
+                        >
+                          <Cpu className="w-3.5 h-3.5" />
+                          OpenAI
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* API Key Input based on selection */}
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Chave de API Gemini (gsk-... ou AIzaSy...)</label>
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">
+                        {apiProvider === "gemini" && "Chave de API Gemini (AIzaSy...)"}
+                        {apiProvider === "groq" && "Chave de API Groq (gsk-...)"}
+                        {apiProvider === "openai" && "Chave de API OpenAI (sk-...)"}
+                      </label>
                       <div className="flex gap-2">
                         <input
                           type="password"
-                          value={geminiApiKey}
+                          value={
+                            apiProvider === "gemini" ? geminiApiKey :
+                            apiProvider === "groq" ? groqApiKey :
+                            openaiApiKey
+                          }
                           onChange={(e) => {
                             const val = e.target.value;
-                            setGeminiApiKey(val);
-                            localStorage.setItem("destine_gemini_api_key", val);
+                            if (apiProvider === "gemini") {
+                              setGeminiApiKey(val);
+                              localStorage.setItem("destine_gemini_api_key", val);
+                            } else if (apiProvider === "groq") {
+                              setGroqApiKey(val);
+                              localStorage.setItem("destine_groq_api_key", val);
+                            } else {
+                              setOpenaiApiKey(val);
+                              localStorage.setItem("destine_openai_api_key", val);
+                            }
                           }}
-                          placeholder="Cole sua GEMINI_API_KEY aqui..."
+                          placeholder={
+                            apiProvider === "gemini" ? "Cole sua GEMINI_API_KEY aqui..." :
+                            apiProvider === "groq" ? "Cole sua GROQ_API_KEY aqui..." :
+                            "Cole sua OPENAI_API_KEY aqui..."
+                          }
                           className="flex-1 bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
                         />
-                        {geminiApiKey && (
+                        {((apiProvider === "gemini" && geminiApiKey) ||
+                          (apiProvider === "groq" && groqApiKey) ||
+                          (apiProvider === "openai" && openaiApiKey)) && (
                           <button
                             onClick={() => {
-                              setGeminiApiKey("");
-                              localStorage.removeItem("destine_gemini_api_key");
+                              if (apiProvider === "gemini") {
+                                setGeminiApiKey("");
+                                localStorage.removeItem("destine_gemini_api_key");
+                              } else if (apiProvider === "groq") {
+                                setGroqApiKey("");
+                                localStorage.removeItem("destine_groq_api_key");
+                              } else {
+                                setOpenaiApiKey("");
+                                localStorage.removeItem("destine_openai_api_key");
+                              }
                             }}
                             className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs font-bold transition border border-rose-500/20 cursor-pointer"
                           >
@@ -660,22 +904,65 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* Custom Model Input */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Modelo Customizado (Opcional)</label>
+                        <span className="text-[9px] text-zinc-500 font-medium">Deixe em branco para usar o padrão</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={apiModel}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setApiModel(val);
+                          localStorage.setItem("destine_api_model", val);
+                        }}
+                        placeholder={
+                          apiProvider === "gemini" ? "Ex: gemini-3.5-flash ou gemini-2.5-pro" :
+                          apiProvider === "groq" ? "Ex: llama-3.3-70b-versatile ou qwen-2.5-32b" :
+                          "Ex: gpt-4o-mini ou gpt-4o"
+                        }
+                        className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
+                      />
+                    </div>
+
                     <div className="flex items-start gap-2.5 text-[11px] text-zinc-400 leading-relaxed bg-[#120D23]/50 p-3 rounded-lg border border-[#241B3E]">
                       <span className="text-amber-400 font-bold shrink-0">💡 Nota:</span>
-                      <div>
-                        Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (<code className="text-emerald-400">process.env.GEMINI_API_KEY</code>). Caso queira usar sua própria conta do Google AI Studio para evitar limites de uso, informe a sua chave acima.
+                      <div className="text-zinc-300">
+                        {apiProvider === "gemini" && "Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (process.env.GEMINI_API_KEY) rodando o modelo gemini-3.5-flash."}
+                        {apiProvider === "groq" && "O sistema usará a variável de ambiente GROQ_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é llama-3.3-70b-versatile, perfeito para ler tabelas."}
+                        {apiProvider === "openai" && "O sistema usará a variável de ambiente OPENAI_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é gpt-4o-mini."}
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-3.5 pt-2">
-                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Como obter uma Chave de API gratuita?</h4>
-                    <ol className="list-decimal list-inside text-xs text-zinc-400 space-y-2 leading-relaxed">
-                      <li>Acesse o console do <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-[#D946EF] hover:underline">Google AI Studio</a></li>
-                      <li>Clique em <strong>"Get API key"</strong> no menu superior</li>
-                      <li>Clique em <strong>"Create API key"</strong> e copie a chave gerada</li>
-                      <li>Cole a chave no campo acima para uso imediato no sistema!</li>
-                    </ol>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Como obter uma Chave de API?</h4>
+                    {apiProvider === "gemini" && (
+                      <ol className="list-decimal list-inside text-xs text-zinc-400 space-y-2 leading-relaxed">
+                        <li>Acesse o console do <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-[#D946EF] hover:underline font-bold">Google AI Studio</a></li>
+                        <li>Clique em <strong>"Get API key"</strong> no menu superior</li>
+                        <li>Clique em <strong>"Create API key"</strong> e copie a chave gerada</li>
+                        <li>Cole a chave no campo acima para uso imediato no sistema!</li>
+                      </ol>
+                    )}
+                    {apiProvider === "groq" && (
+                      <ol className="list-decimal list-inside text-xs text-zinc-400 space-y-2 leading-relaxed">
+                        <li>Acesse o <a href="https://console.groq.com/" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline font-bold">Groq Console</a></li>
+                        <li>Navegue até a seção <strong>"API Keys"</strong> no menu lateral</li>
+                        <li>Clique em <strong>"Create API Key"</strong>, dê um nome e copie a chave (gsk-...)</li>
+                        <li>Cole a chave acima. O Groq oferece velocidades absurdamente rápidas de processamento!</li>
+                      </ol>
+                    )}
+                    {apiProvider === "openai" && (
+                      <ol className="list-decimal list-inside text-xs text-zinc-400 space-y-2 leading-relaxed">
+                        <li>Acesse a plataforma <a href="https://platform.openai.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline font-bold">OpenAI Platform</a></li>
+                        <li>Vá em <strong>"API Keys"</strong> no menu lateral esquerdo</li>
+                        <li>Clique em <strong>"Create new secret key"</strong> e copie a chave (sk-...)</li>
+                        <li>Cole no campo acima. Lembre-se de que sua conta OpenAI precisa ter créditos ativos.</li>
+                      </ol>
+                    )}
                   </div>
                 </div>
               )}
@@ -702,7 +989,7 @@ export default function App() {
                 <div>
                   <h3 className="text-xs font-bold text-white tracking-wide">Suporte Interno • Staff DESTINE</h3>
                   <p className="text-[10px] text-pink-100 opacity-90 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-pink-300 animate-pulse"></span>
                     Base da IA Conectada ({totalSheets} Planilhas)
                   </p>
                 </div>

@@ -351,31 +351,42 @@ app.post("/api/spreadsheets/reset", checkAdminAuth, (req: Request, res: Response
 // Query Endpoint for Sheet Chat
 app.post("/api/chat", async (req: Request, res: Response) => {
   try {
-    const { message, history, customApiKey, customGoogleSheetUrl, customGoogleSheetTabs, clientSpreadsheets } = req.body;
+    const { 
+      message, 
+      history, 
+      customApiKey, 
+      apiProvider = "gemini", 
+      apiModel, 
+      customGoogleSheetUrl, 
+      customGoogleSheetTabs, 
+      clientSpreadsheets 
+    } = req.body;
 
     if (!message) {
        res.status(400).json({ error: "Mensagem é obrigatória." });
        return;
     }
 
-    const activeApiKey = customApiKey || apiKey;
-
+    // Find the correct API Key based on provider
+    let activeApiKey = customApiKey;
     if (!activeApiKey) {
-       res.status(400).json({ 
-        error: "GEMINI_API_KEY não configurada. Por favor, adicione sua chave de API nas configurações ou use a opção de Chave de API Personalizada no painel." 
-      });
-      return;
+      if (apiProvider === "groq") {
+        activeApiKey = process.env.GROQ_API_KEY;
+      } else if (apiProvider === "openai") {
+        activeApiKey = process.env.OPENAI_API_KEY;
+      } else {
+        activeApiKey = process.env.GEMINI_API_KEY || apiKey;
+      }
     }
 
-    // Initialize client for this request with the appropriate key
-    const ai = new GoogleGenAI({
-      apiKey: activeApiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
+    if (!activeApiKey) {
+       const providerName = apiProvider === "groq" ? "Groq" : apiProvider === "openai" ? "OpenAI" : "Gemini";
+       const envVarName = apiProvider === "groq" ? "GROQ_API_KEY" : apiProvider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY";
+       res.status(400).json({ 
+         error: `Chave de API do ${providerName} não configurada. Por favor, adicione sua chave de API nas variáveis de ambiente (${envVarName}) ou use a opção de Chave de API Personalizada no painel.` 
+       });
+       return;
+    }
 
     let sheets: any[] = [];
     let loadError: string | null = null;
@@ -457,46 +468,105 @@ Regras fundamentais de resposta:
 6. Responda em português brasileiro. Use um tom calmo, profissional e eficiente de organizador de evento corporativo de alto nível.
 `;
 
-    // 3. Prepare Chat Prompt / Contents
-    // We send previous messages to construct the conversation flow
-    const formattedContents: any[] = [];
-    
-    // Add history
-    if (history && Array.isArray(history)) {
-      history.forEach((msg: any) => {
-        formattedContents.push({
-          role: msg.role === "assistant" ? "model" : "user",
-          parts: [{ text: msg.content }]
+    // 3. Prepare Chat Prompt / Contents based on Provider
+    let reply = "";
+
+    if (apiProvider === "gemini") {
+      // Format history and prompt for Gemini
+      const formattedContents: any[] = [];
+      if (history && Array.isArray(history)) {
+        history.forEach((msg: any) => {
+          formattedContents.push({
+            role: msg.role === "assistant" ? "model" : "user",
+            parts: [{ text: msg.content }]
+          });
         });
+      }
+
+      const userPromptWithContext = `Aqui estão as planilhas disponíveis atuais:\n\n${sheetsContextText}\n\nPERGUNTA DO USUÁRIO:\n${message}`;
+      formattedContents.push({
+        role: "user",
+        parts: [{ text: userPromptWithContext }]
       });
+
+      // Initialize client for this request with the appropriate key
+      const ai = new GoogleGenAI({
+        apiKey: activeApiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const response = await ai.models.generateContent({
+        model: apiModel || "gemini-3.5-flash",
+        contents: formattedContents,
+        config: {
+          systemInstruction: systemInstruction,
+          temperature: 0.2, // Low temperature for high accuracy/grounding in tabular data
+        }
+      });
+
+      reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+    } else {
+      // Format messages for OpenAI / Groq (OpenAI-compatible)
+      const messagesArray: any[] = [
+        { role: "system", content: systemInstruction }
+      ];
+
+      if (history && Array.isArray(history)) {
+        history.forEach((msg: any) => {
+          messagesArray.push({
+            role: msg.role === "assistant" ? "assistant" : "user",
+            content: msg.content
+          });
+        });
+      }
+
+      const userPromptWithContext = `Aqui estão as planilhas disponíveis atuais:\n\n${sheetsContextText}\n\nPERGUNTA DO USUÁRIO:\n${message}`;
+      messagesArray.push({
+        role: "user",
+        content: userPromptWithContext
+      });
+
+      let endpoint = "https://api.openai.com/v1/chat/completions";
+      let defaultModel = "gpt-4o-mini";
+
+      if (apiProvider === "groq") {
+        endpoint = "https://api.groq.com/openai/v1/chat/completions";
+        defaultModel = "llama-3.3-70b-versatile";
+      }
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${activeApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: apiModel || defaultModel,
+          messages: messagesArray,
+          temperature: 0.2
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData?.error?.message || `Erro da API ${apiProvider} (Código ${response.status})`);
+      }
+
+      const responseData = await response.json();
+      reply = responseData.choices?.[0]?.message?.content || "Não foi possível obter resposta do provedor de IA.";
     }
 
-    // Append the spreadsheets context and new user message
-    // Putting context together with user prompt ensures it is grounded in the latest session upload
-    const userPromptWithContext = `Aqui estão as planilhas disponíveis atuais:\n\n${sheetsContextText}\n\nPERGUNTA DO USUÁRIO:\n${message}`;
-    
-    formattedContents.push({
-      role: "user",
-      parts: [{ text: userPromptWithContext }]
-    });
-
-    // 4. Generate Content with Gemini model
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: formattedContents,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.2, // Low temperature for high accuracy/grounding in tabular data
-      }
-    });
-
-    const reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
     res.json({ reply });
 
   } catch (err: any) {
-    console.error("Error calling Gemini API:", err);
+    const provider = req.body?.apiProvider || "gemini";
+    console.error(`Error calling ${provider} API:`, err);
     res.status(500).json({ 
-      error: "Houve um erro técnico ao processar sua pergunta pelo Gemini.",
+      error: `Houve um erro técnico ao processar sua pergunta pelo ${provider}.`,
       details: err.message || err 
     });
   }
