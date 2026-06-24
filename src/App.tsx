@@ -84,7 +84,7 @@ export default function App() {
   const [sheetError, setSheetError] = useState<string | null>(null);
 
   // Load spreadsheets from server
-  const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string) => {
+  const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string, forceUpdate?: boolean) => {
     try {
       const activeUrl = overrideUrl !== undefined ? overrideUrl : (localStorage.getItem("destine_google_sheet_url") || "");
       const activeTabs = overrideTabs !== undefined ? overrideTabs : (localStorage.getItem("destine_google_sheet_tabs") || "");
@@ -95,6 +95,9 @@ export default function App() {
       }
       if (activeTabs) {
         queryUrl += `&customTabs=${encodeURIComponent(activeTabs)}`;
+      }
+      if (forceUpdate) {
+        queryUrl += `&force=true`;
       }
       
       const res = await fetch(queryUrl);
@@ -176,16 +179,9 @@ export default function App() {
   useEffect(() => {
     fetchSpreadsheets();
     
-    // Poll the server for the latest spreadsheets every 5 seconds to sync all visitors automatically
-    const interval = setInterval(() => {
-      fetchSpreadsheets();
-    }, 5000);
-
     if (adminPassword) {
       handleAdminLogin(adminPassword);
     }
-
-    return () => clearInterval(interval);
   }, [adminPassword]);
 
   const saveSpreadsheets = async (updated: Spreadsheet[]) => {
@@ -792,7 +788,7 @@ export default function App() {
                                   })
                                 });
                               }
-                              await fetchSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
+                              await fetchSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs, true);
                               alert("Planilhas do Google Sheets importadas e sincronizadas globalmente com sucesso!");
                             } catch (e: any) {
                               alert("Erro ao sincronizar do Google Sheets: " + e.message);
