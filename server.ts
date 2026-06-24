@@ -9,7 +9,24 @@ import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 dotenv.config();
 
 const DB_PATH = path.join(process.cwd(), "spreadsheets-db.json");
+const CONFIG_PATH = path.join(process.cwd(), "config-db.json");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "destine26";
+
+// Load Google Sheet configuration from file or env variables
+let serverGoogleSheetConfig = {
+  url: process.env.GOOGLE_SHEET_URL || "",
+  tabs: process.env.GOOGLE_SHEET_TABS || ""
+};
+
+try {
+  if (fs.existsSync(CONFIG_PATH)) {
+    const savedConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    if (savedConfig.url !== undefined) serverGoogleSheetConfig.url = savedConfig.url;
+    if (savedConfig.tabs !== undefined) serverGoogleSheetConfig.tabs = savedConfig.tabs;
+  }
+} catch (err) {
+  console.error("Erro ao carregar configuração de planilhas do Google Sheets:", err);
+}
 
 // In-memory cache for Vercel/Serverless where file system is read-only
 let globalInMemorySpreadsheets: any[] | null = null;
@@ -57,8 +74,8 @@ function parseCSV(csvText: string): string[][] {
 }
 
 async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promise<any[]> {
-  const googleSheetUrl = customUrl || process.env.GOOGLE_SHEET_URL;
-  const googleSheetTabs = customTabs !== undefined ? customTabs : (process.env.GOOGLE_SHEET_TABS || "");
+  const googleSheetUrl = customUrl !== undefined ? customUrl : serverGoogleSheetConfig.url;
+  const googleSheetTabs = customTabs !== undefined ? customTabs : serverGoogleSheetConfig.tabs;
 
   if (googleSheetUrl) {
     try {
@@ -315,6 +332,26 @@ app.post("/api/auth", (req: Request, res: Response) => {
   }
 });
 
+// GET global Google Sheet config
+app.get("/api/config", (req: Request, res: Response) => {
+  res.json(serverGoogleSheetConfig);
+});
+
+// POST update global Google Sheet config
+app.post("/api/config", checkAdminAuth, (req: Request, res: Response) => {
+  const { url, tabs } = req.body;
+  if (url !== undefined) serverGoogleSheetConfig.url = url;
+  if (tabs !== undefined) serverGoogleSheetConfig.tabs = tabs;
+  
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(serverGoogleSheetConfig, null, 2), "utf8");
+  } catch (err) {
+    console.error("Erro ao salvar config no arquivo:", err);
+  }
+  
+  res.json({ success: true, config: serverGoogleSheetConfig });
+});
+
 // Public GET spreadsheets
 app.get("/api/spreadsheets", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -392,8 +429,10 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     let loadError: string | null = null;
 
     try {
-      if (customGoogleSheetUrl) {
-        sheets = await loadSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
+      const targetUrl = customGoogleSheetUrl || serverGoogleSheetConfig.url;
+      const targetTabs = customGoogleSheetUrl ? customGoogleSheetTabs : serverGoogleSheetConfig.tabs;
+      if (targetUrl) {
+        sheets = await loadSpreadsheets(targetUrl, targetTabs);
       }
     } catch (err: any) {
       console.error("Erro ao carregar Google Sheets para o chat:", err);

@@ -86,8 +86,8 @@ export default function App() {
   // Load spreadsheets from server
   const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string) => {
     try {
-      const activeUrl = overrideUrl !== undefined ? overrideUrl : customGoogleSheetUrl;
-      const activeTabs = overrideTabs !== undefined ? overrideTabs : customGoogleSheetTabs;
+      const activeUrl = overrideUrl !== undefined ? overrideUrl : (localStorage.getItem("destine_google_sheet_url") || "");
+      const activeTabs = overrideTabs !== undefined ? overrideTabs : (localStorage.getItem("destine_google_sheet_tabs") || "");
       
       let queryUrl = `/api/spreadsheets?t=${Date.now()}`;
       if (activeUrl) {
@@ -148,6 +148,23 @@ export default function App() {
     setAdminPassword("");
     localStorage.removeItem("destine_staff_password");
   };
+
+  useEffect(() => {
+    // Load global Google Sheets configuration from the server to sync across all visitors
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((config) => {
+        if (config.url) {
+          setCustomGoogleSheetUrl(config.url);
+          localStorage.setItem("destine_google_sheet_url", config.url);
+        }
+        if (config.tabs !== undefined) {
+          setCustomGoogleSheetTabs(config.tabs);
+          localStorage.setItem("destine_google_sheet_tabs", config.tabs);
+        }
+      })
+      .catch((e) => console.error("Erro ao carregar configuração global do Google Sheets:", e));
+  }, []);
 
   useEffect(() => {
     if (apiModel === "llama-3.3-70b-versatile") {
@@ -762,8 +779,21 @@ export default function App() {
                         <button
                           onClick={async () => {
                             try {
+                              if (isAdminLoggedIn) {
+                                await fetch("/api/config", {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                    "Authorization": `Bearer ${adminPassword}`
+                                  },
+                                  body: JSON.stringify({
+                                    url: customGoogleSheetUrl,
+                                    tabs: customGoogleSheetTabs
+                                  })
+                                });
+                              }
                               await fetchSpreadsheets(customGoogleSheetUrl, customGoogleSheetTabs);
-                              alert("Planilhas do Google Sheets importadas e sincronizadas com sucesso!");
+                              alert("Planilhas do Google Sheets importadas e sincronizadas globalmente com sucesso!");
                             } catch (e: any) {
                               alert("Erro ao sincronizar do Google Sheets: " + e.message);
                             }
