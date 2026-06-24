@@ -60,6 +60,14 @@ let serverGoogleSheetConfig = readConfig();
 // In-memory cache for Vercel/Serverless where file system is read-only
 let globalInMemorySpreadsheets: any[] | null = null;
 
+// Cache specifically for Google Sheets download to avoid rate-limiting and high serverless bills
+let cachedGoogleSheetData: {
+  url: string;
+  tabs: string;
+  timestamp: number;
+  data: any;
+} | null = null;
+
 // Load / Save Helpers
 function parseCSV(csvText: string): string[][] {
   const lines: string[][] = [];
@@ -102,7 +110,7 @@ function parseCSV(csvText: string): string[][] {
   return lines;
 }
 
-async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promise<any[]> {
+async function loadSpreadsheets(customUrl?: string, customTabs?: string, forceUpdate?: boolean): Promise<any[]> {
   const googleSheetUrl = customUrl !== undefined ? customUrl : serverGoogleSheetConfig.url;
   let googleSheetTabs = customTabs !== undefined ? customTabs : serverGoogleSheetConfig.tabs;
 
@@ -122,6 +130,18 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
   }
 
   if (googleSheetUrl) {
+    // 2-minute cache to prevent redundant fetches from concurrent client polling
+    const now = Date.now();
+    const cacheKeyTabs = googleSheetTabs || "";
+    if (!forceUpdate && 
+        cachedGoogleSheetData && 
+        cachedGoogleSheetData.url === googleSheetUrl && 
+        cachedGoogleSheetData.tabs === cacheKeyTabs && 
+        (now - cachedGoogleSheetData.timestamp) < 120000) {
+      console.log("Servindo planilha integrada do cache em memória (Poupando Vercel/Google Sheets)");
+      return [cachedGoogleSheetData.data, ...otherSheets];
+    }
+
     try {
       const isPublished = googleSheetUrl.includes("/d/e/");
       let sheetId = "";
@@ -204,6 +224,13 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
           rawFileName: "Google Sheets Live",
           updatedAt: new Date().toLocaleDateString("pt-BR"),
           tabs: fetchedTabs
+        };
+        // Update the global cache
+        cachedGoogleSheetData = {
+          url: googleSheetUrl,
+          tabs: googleSheetTabs || "",
+          timestamp: Date.now(),
+          data: googleSheetObj
         };
         return [googleSheetObj, ...otherSheets];
       } else {
@@ -326,6 +353,9 @@ app.post("/api/config", checkAdminAuth, (req: Request, res: Response) => {
   if (url !== undefined) serverGoogleSheetConfig.url = url;
   if (tabs !== undefined) serverGoogleSheetConfig.tabs = tabs;
   
+  // Invalidate Google Sheet cache on configuration update
+  cachedGoogleSheetData = null;
+  
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(serverGoogleSheetConfig, null, 2), "utf8");
   } catch (err) {
@@ -342,8 +372,9 @@ app.get("/api/spreadsheets", async (req: Request, res: Response) => {
   res.setHeader("Expires", "0");
   const customUrl = req.query.customUrl as string;
   const customTabs = req.query.customTabs as string;
+  const forceUpdate = req.query.force === "true";
   try {
-    const sheets = await loadSpreadsheets(customUrl, customTabs);
+    const sheets = await loadSpreadsheets(customUrl, customTabs, forceUpdate);
     res.json({ spreadsheets: sheets });
   } catch (err: any) {
     res.status(400).json({ error: err.message || "Erro desconhecido ao carregar planilhas." });
@@ -357,12 +388,14 @@ app.post("/api/spreadsheets", checkAdminAuth, (req: Request, res: Response) => {
     res.status(400).json({ error: "O campo 'spreadsheets' deve ser uma lista válida." });
     return;
   }
+  cachedGoogleSheetData = null; // Clear cache on manual update
   saveSpreadsheets(spreadsheets);
   res.json({ spreadsheets });
 });
 
 // Protected POST reset spreadsheets to defaults
 app.post("/api/spreadsheets/reset", checkAdminAuth, (req: Request, res: Response) => {
+  cachedGoogleSheetData = null; // Clear cache on reset
   saveSpreadsheets(DEFAULT_SPREADSHEETS);
   res.json({ spreadsheets: DEFAULT_SPREADSHEETS });
 });
