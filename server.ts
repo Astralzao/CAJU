@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
+import * as XLSX from "xlsx";
 import { GoogleGenAI } from "@google/genai";
 import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 
@@ -103,18 +104,31 @@ function parseCSV(csvText: string): string[][] {
 
 async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promise<any[]> {
   const googleSheetUrl = customUrl !== undefined ? customUrl : serverGoogleSheetConfig.url;
-  const googleSheetTabs = customTabs !== undefined ? customTabs : serverGoogleSheetConfig.tabs;
+  let googleSheetTabs = customTabs !== undefined ? customTabs : serverGoogleSheetConfig.tabs;
+
+  let otherSheets: any[] = [];
+  try {
+    if (fs.existsSync(DB_PATH)) {
+      const data = fs.readFileSync(DB_PATH, "utf8");
+      const saved = JSON.parse(data);
+      if (Array.isArray(saved)) {
+        otherSheets = saved.filter(s => s && s.id !== "google-sheet");
+      }
+    } else if (globalInMemorySpreadsheets && Array.isArray(globalInMemorySpreadsheets)) {
+      otherSheets = globalInMemorySpreadsheets.filter(s => s && s.id !== "google-sheet");
+    }
+  } catch (err) {
+    console.error("Erro ao ler banco de dados de planilhas para mesclagem:", err);
+  }
 
   if (googleSheetUrl) {
     try {
       const isPublished = googleSheetUrl.includes("/d/e/");
       let sheetId = "";
       if (isPublished) {
-        // Web-published spreadsheet link
         const match = googleSheetUrl.match(/\/d\/e\/([a-zA-Z0-9-_]+)/);
         if (match) sheetId = match[1];
       } else {
-        // Standard edit/view sharing link
         const match = googleSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
         if (match) sheetId = match[1];
       }
@@ -123,145 +137,77 @@ async function loadSpreadsheets(customUrl?: string, customTabs?: string): Promis
         throw new Error("URL do Google Sheets inválida. Certifique-se de copiar o link completo do seu navegador.");
       }
 
-      const tabsList = googleSheetTabs.split(",").map(t => t.trim()).filter(Boolean);
-      const fetchedTabs: any[] = [];
-      let htmlDetected = false;
+      // Fetch the entire spreadsheet as an .xlsx file! This gets ALL tabs automatically!
+      const exportUrl = isPublished
+        ? `https://docs.google.com/spreadsheets/d/e/${sheetId}/pub?output=xlsx`
+        : `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
 
-      if (tabsList.length > 0) {
-        for (const tabName of tabsList) {
-          const exportUrls = [];
-          if (isPublished) {
-            exportUrls.push(`https://docs.google.com/spreadsheets/d/e/${sheetId}/pub?output=csv&sheet=${encodeURIComponent(tabName)}`);
-          } else {
-            // Standard sheet has several highly reliable endpoints:
-            // 1. Direct export using format=csv and sheet=...
-            exportUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&sheet=${encodeURIComponent(tabName)}`);
-            // 2. Visualization Query endpoint as a fallback for standard sheets
-            exportUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`);
-          }
+      console.log(`Buscando planilha remota via XLSX: ${exportUrl}`);
+      const response = await fetch(exportUrl);
+      if (!response.ok) {
+        throw new Error("Não foi possível acessar a planilha. Verifique se o compartilhamento está como 'Qualquer pessoa com o link pode ler' (Leitor) ou se o documento está 'Publicado na Web'.");
+      }
 
-          let csvText = "";
-          let success = false;
-
-          for (const url of exportUrls) {
-            try {
-              const response = await fetch(url);
-              if (response.ok) {
-                const text = await response.text();
-                // If it returns HTML, it's likely a login/error/private page
-                if (text.trim().toLowerCase().startsWith("<!doctype html") || text.trim().toLowerCase().startsWith("<html")) {
-                  if (text.includes("Google Accounts") || text.includes("login") || text.includes("signin")) {
-                    htmlDetected = true;
-                  }
-                  continue;
-                }
-                csvText = text;
-                success = true;
-                break; // Found working URL for this tab
-              }
-            } catch (err) {
-              console.error(`Erro ao buscar aba ${tabName} via ${url}:`, err);
-            }
-          }
-
-          if (success && csvText) {
-            const parsedLines = parseCSV(csvText);
-            if (parsedLines.length > 0) {
-              const headers = parsedLines[0].map((h: string) => h.trim());
-              const rows = parsedLines.slice(1).map((rowArr: string[]) => {
-                const rowObj: any = {};
-                headers.forEach((header: string, index: number) => {
-                  if (header) {
-                    rowObj[header] = rowArr[index] !== undefined ? rowArr[index].trim() : "";
-                  }
-                });
-                return rowObj;
-              }).filter(row => Object.values(row).some(val => val !== ""));
-
-              fetchedTabs.push({
-                name: tabName,
-                headers: headers.filter((h: string) => h !== ""),
-                rows: rows
-              });
-            }
-          }
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("text/html")) {
+        const text = await response.text();
+        if (text.includes("Google Accounts") || text.includes("login") || text.includes("signin")) {
+          throw new Error("A planilha do Google Sheets parece estar PRIVADA ou restrita. No Google Sheets, clique em 'Compartilhar' no topo direito, altere o 'Acesso geral' de 'Restrito' para 'Qualquer pessoa com o link' (como Leitor), salve e tente novamente!");
         }
       }
 
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      // Parse the .xlsx workbook
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const fetchedTabs: any[] = [];
+
+      // Determine list of tabs to load (if specified)
+      const tabsList = googleSheetTabs 
+        ? googleSheetTabs.split(",").map(t => t.trim().toLowerCase()).filter(Boolean)
+        : [];
+
+      workbook.SheetNames.forEach((sheetName) => {
+        // If specific tabs were specified, filter by them (case-insensitive)
+        if (tabsList.length > 0 && !tabsList.includes(sheetName.toLowerCase())) {
+          return;
+        }
+
+        const worksheet = workbook.Sheets[sheetName];
+        const rawJson = XLSX.utils.sheet_to_json(worksheet, { defval: "" }) as Array<Record<string, any>>;
+        
+        if (rawJson.length > 0) {
+          // Extract unique keys as headers
+          const headers = Array.from(
+            new Set(rawJson.flatMap((row) => Object.keys(row)))
+          );
+          
+          fetchedTabs.push({
+            name: sheetName,
+            headers: headers.filter((h: string) => h && h.trim() !== ""),
+            rows: rawJson.map((row) => {
+              const newRow: Record<string, any> = {};
+              headers.forEach((h) => {
+                newRow[h] = row[h] !== undefined ? String(row[h]).trim() : "";
+              });
+              return newRow;
+            }).filter(row => Object.values(row).some(val => val !== ""))
+          });
+        }
+      });
+
       if (fetchedTabs.length > 0) {
-        return [{
+        const googleSheetObj = {
           id: "google-sheet",
           name: "Planilha Integrada (Google Sheets)",
           rawFileName: "Google Sheets Live",
           updatedAt: new Date().toLocaleDateString("pt-BR"),
           tabs: fetchedTabs
-        }];
+        };
+        return [googleSheetObj, ...otherSheets];
       } else {
-        // Fallback or default primary sheet download: Try published vs standard URLs
-        const fallbackUrls = [];
-        if (isPublished) {
-          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/e/${sheetId}/pub?output=csv`);
-        } else {
-          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
-          fallbackUrls.push(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`);
-        }
-
-        let csvTextFallback = "";
-        let fallbackSuccess = false;
-
-        for (const url of fallbackUrls) {
-          try {
-            const response = await fetch(url);
-            if (response.ok) {
-              const text = await response.text();
-              if (text.trim().toLowerCase().startsWith("<!doctype html") || text.trim().toLowerCase().startsWith("<html")) {
-                if (text.includes("Google Accounts") || text.includes("login") || text.includes("signin")) {
-                  htmlDetected = true;
-                }
-                continue;
-              }
-              csvTextFallback = text;
-              fallbackSuccess = true;
-              break;
-            }
-          } catch (err) {
-            console.error(`Erro no fallback do Google Sheets via ${url}:`, err);
-          }
-        }
-
-        if (fallbackSuccess && csvTextFallback) {
-          const parsedLines = parseCSV(csvTextFallback);
-          if (parsedLines.length > 0) {
-            const headers = parsedLines[0].map((h: string) => h.trim());
-            const rows = parsedLines.slice(1).map((rowArr: string[]) => {
-              const rowObj: any = {};
-              headers.forEach((header: string, index: number) => {
-                if (header) {
-                  rowObj[header] = rowArr[index] !== undefined ? rowArr[index].trim() : "";
-                }
-              });
-              return rowObj;
-            }).filter(row => Object.values(row).some(val => val !== ""));
-
-            return [{
-              id: "google-sheet",
-              name: "Planilha Integrada (Google Sheets)",
-              rawFileName: "Google Sheets Live (Principal)",
-              updatedAt: new Date().toLocaleDateString("pt-BR"),
-              tabs: [{
-                name: "Principal",
-                headers: headers.filter((h: string) => h !== ""),
-                rows: rows
-              }]
-            }];
-          }
-        }
-
-        if (htmlDetected) {
-          throw new Error("A planilha do Google Sheets parece estar PRIVADA ou restrita. No Google Sheets, clique em 'Compartilhar' no topo direito, altere o 'Acesso geral' de 'Restrito' para 'Qualquer pessoa com o link' (como Leitor), salve e tente novamente!");
-        }
-
-        throw new Error(`Não conseguimos ler nenhuma aba com os nomes fornecidos ("${googleSheetTabs || 'Principal'}"). Verifique se o nome das abas em sua planilha é idêntico e se as configurações de compartilhamento permitem acesso público.`);
+        throw new Error("Não foi possível encontrar nenhum dado válido nas abas de sua Planilha Google.");
       }
     } catch (err: any) {
       console.error("Erro ao carregar dados do Google Sheets:", err);
