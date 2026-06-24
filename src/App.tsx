@@ -150,6 +150,13 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (apiModel === "llama-3.3-70b-versatile") {
+      setApiModel("llama-3.1-8b-instant");
+      localStorage.setItem("destine_api_model", "llama-3.1-8b-instant");
+    }
+  }, [apiModel]);
+
+  useEffect(() => {
     fetchSpreadsheets();
     
     // Poll the server for the latest spreadsheets every 5 seconds to sync all visitors automatically
@@ -449,13 +456,13 @@ export default function App() {
             </p>
 
             <button
-              className="w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer bg-gradient-to-r from-emerald-500/25 to-emerald-500/5 border-l-4 border-emerald-400 text-emerald-400"
+              className="w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer bg-gradient-to-r from-[#D946EF]/25 to-[#D946EF]/5 border-l-4 border-[#D946EF] text-[#D946EF]"
             >
               <div className="flex items-center gap-2.5">
-                <Bot className="w-4 h-4 text-emerald-400" />
+                <Bot className="w-4 h-4 text-[#D946EF]" />
                 <span>Alimentação IA (Planilhas)</span>
               </div>
-              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-extrabold uppercase px-1.5 py-0.5 rounded-full shrink-0">
+              <span className="text-[9px] bg-[#D946EF]/20 text-pink-300 font-extrabold uppercase px-1.5 py-0.5 rounded-full shrink-0">
                 Ativo
               </span>
             </button>
@@ -469,7 +476,7 @@ export default function App() {
               {isAdminLoggedIn ? "luismariofilho@gmail.com" : "Visitante Anônimo"}
             </span>
             <span className={`text-[9px] font-extrabold uppercase mt-0.5 px-2 py-0.5 rounded-full w-fit ${
-              isAdminLoggedIn ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
+              isAdminLoggedIn ? "bg-[#D946EF]/10 text-[#D946EF] border border-[#D946EF]/20" : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
             }`}>
               {isAdminLoggedIn ? "Staff Autenticado" : "Acesso Visitante"}
             </span>
@@ -550,7 +557,7 @@ export default function App() {
               {/* Tab header */}
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
-                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1">
+                  <span className="text-xs font-bold text-[#D946EF] uppercase tracking-widest flex items-center gap-1">
                     <Bot className="w-3.5 h-3.5" /> Workspace de Alimentação Automatizada
                   </span>
                   <h2 className="text-2xl font-black text-white tracking-tight mt-1">Sincronizador de Dados Gemini</h2>
@@ -572,7 +579,7 @@ export default function App() {
                 <button
                   onClick={() => setActiveAdminTab("upload")}
                   className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    activeAdminTab === "upload" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                    activeAdminTab === "upload" ? "bg-[#D946EF] text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
                   }`}
                 >
                   1. Upload de Novas Planilhas
@@ -580,7 +587,7 @@ export default function App() {
                 <button
                   onClick={() => setActiveAdminTab("tables")}
                   className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    activeAdminTab === "tables" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                    activeAdminTab === "tables" ? "bg-[#D946EF] text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
                   }`}
                 >
                   2. Visualizar & Editar Tabelas ({totalSheets})
@@ -588,7 +595,7 @@ export default function App() {
                 <button
                   onClick={() => setActiveAdminTab("config")}
                   className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    activeAdminTab === "config" ? "bg-emerald-500 text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
+                    activeAdminTab === "config" ? "bg-[#D946EF] text-slate-950 shadow-md" : "text-zinc-400 hover:text-white"
                   }`}
                 >
                   3. Chave de API Gemini 🔑
@@ -616,7 +623,7 @@ export default function App() {
                     {/* Local Info panel */}
                     <div className="bg-[#120D23] border border-[#241B3E] p-5 rounded-2xl space-y-3">
                       <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                        <Database className="w-4 h-4 text-emerald-400" />
+                        <Database className="w-4 h-4 text-[#D946EF]" />
                         Status da Base Operacional
                       </h3>
                       <div className="grid grid-cols-2 gap-3 text-center">
@@ -626,7 +633,7 @@ export default function App() {
                         </div>
                         <div className="p-3 bg-[#0B0616] rounded-xl border border-[#241B3E]">
                           <span className="text-[10px] text-zinc-500 font-bold block uppercase">Registros totais</span>
-                          <span className="text-xl font-bold text-emerald-400">{totalRecords}</span>
+                          <span className="text-xl font-bold text-pink-400">{totalRecords}</span>
                         </div>
                       </div>
                       <p className="text-[11px] text-zinc-400 leading-relaxed pt-1">
@@ -642,10 +649,10 @@ export default function App() {
                     {spreadsheets.length > 0 ? (
                       <div className="space-y-3.5">
                         {spreadsheets.map((sheet) => (
-                          <div key={sheet.id} className="p-4 bg-[#0B0616] border border-[#241B3E] rounded-xl flex items-center justify-between hover:border-emerald-500/20 transition">
+                          <div key={sheet.id} className="p-4 bg-[#0B0616] border border-[#241B3E] rounded-xl flex items-center justify-between hover:border-[#D946EF]/20 transition">
                             <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shrink-0">
-                                <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                              <div className="w-9 h-9 rounded-xl bg-[#D946EF]/10 flex items-center justify-center border border-[#D946EF]/20 shrink-0">
+                                <FileSpreadsheet className="w-5 h-5 text-[#D946EF]" />
                               </div>
                               <div>
                                 <h4 className="text-xs font-bold text-white leading-snug">{sheet.name}</h4>
@@ -660,7 +667,7 @@ export default function App() {
                                 onClick={() => {
                                   setActiveAdminTab("tables");
                                 }}
-                                className="text-[11px] text-emerald-400 hover:underline font-bold"
+                                className="text-[11px] text-[#D946EF] hover:underline font-bold"
                               >
                                 Inspecionar
                               </button>
@@ -702,7 +709,7 @@ export default function App() {
                   {/* Section 1: Google Sheets Integration */}
                   <div>
                     <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      <FileSpreadsheet className="w-4 h-4 text-[#D946EF]" />
                       Integração de Planilhas Google (Google Sheets)
                     </h3>
                     <p className="text-xs text-zinc-400 mt-1">
@@ -732,7 +739,7 @@ export default function App() {
                           localStorage.setItem("destine_google_sheet_url", val);
                         }}
                         placeholder="https://docs.google.com/spreadsheets/d/.../edit"
-                        className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                        className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
                       />
                     </div>
 
@@ -748,7 +755,7 @@ export default function App() {
                             localStorage.setItem("destine_google_sheet_tabs", val);
                           }}
                           placeholder="Geral, Protocolos_Saude, Fornecedores_Principais"
-                          className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition"
+                          className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
                         />
                       </div>
                       <div className="flex items-end">
@@ -761,7 +768,7 @@ export default function App() {
                               alert("Erro ao sincronizar do Google Sheets: " + e.message);
                             }
                           }}
-                          className="w-full px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                          className="w-full px-4 py-2 bg-[#D946EF] hover:opacity-90 text-slate-950 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
                         >
                           <RefreshCw className="w-4 h-4 animate-spin-slow" />
                           Salvar e Sincronizar Agora 🔄
@@ -774,7 +781,7 @@ export default function App() {
                       <div className="space-y-1 text-zinc-300">
                         <p>1. No seu Google Sheets, clique no botão azul <strong>Compartilhar (Share)</strong> no canto superior direito.</p>
                         <p>2. Mude o acesso geral para <strong>"Qualquer pessoa com o link" (Anyone with the link)</strong> como <strong>Leitor (Viewer)</strong>.</p>
-                        <p>3. Certifique-se de que os nomes das abas correspondem aos nomes listados acima (ex: <code className="text-emerald-400 bg-black/30 px-1 py-0.5 rounded">Geral</code>, <code className="text-emerald-400 bg-black/30 px-1 py-0.5 rounded">Protocolos_Saude</code>, etc).</p>
+                        <p>3. Certifique-se de que os nomes das abas correspondem aos nomes listados acima (ex: <code className="text-[#D946EF] bg-black/30 px-1 py-0.5 rounded">Geral</code>, <code className="text-[#D946EF] bg-black/30 px-1 py-0.5 rounded">Protocolos_Saude</code>, etc).</p>
                       </div>
                     </div>
                   </div>

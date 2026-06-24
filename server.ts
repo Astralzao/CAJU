@@ -415,10 +415,37 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       } catch (e) {}
     }
 
-    // 1. Format Sheet Data for the prompt context
+    // 1. Extrair termos de busca inteligentes da mensagem atual e das últimas mensagens do histórico
+    const userMessageLower = message.toLowerCase();
+    const historyText = (history && Array.isArray(history)) 
+      ? history.slice(-2).map((h: any) => h.content.toLowerCase()).join(" ") 
+      : "";
+    const combinedTextForSearch = `${userMessageLower} ${historyText}`;
+    
+    const searchTerms = combinedTextForSearch
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ")
+      .split(/\s+/)
+      .filter((term: string) => term.length > 2 && !["dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", "nas", "aos", "aas"].includes(term));
+
+    // 2. Format Sheet Data for the prompt context with smart filtering (RAG)
     let sheetsContextText = "";
     if (sheets && Array.isArray(sheets) && sheets.length > 0) {
-      sheetsContextText = "--- DADOS DAS PLANILHAS ALIMENTADAS ---\n\n";
+      sheetsContextText = "--- DADOS DAS PLANILHAS ALIMENTADAS (Filtrados por relevância para economizar limite de tokens) ---\n\n";
+      
+      // Calcular total de linhas para decidir se precisa de filtragem agressiva
+      let totalLinesInAllSheets = 0;
+      sheets.forEach((sheet: any) => {
+        if (sheet.tabs && Array.isArray(sheet.tabs)) {
+          sheet.tabs.forEach((tab: any) => {
+            if (tab.rows && Array.isArray(tab.rows)) {
+              totalLinesInAllSheets += tab.rows.length;
+            }
+          });
+        }
+      });
+
+      const useSmartFiltering = totalLinesInAllSheets > 25;
+
       sheets.forEach((sheet: any) => {
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
         if (sheet.tabs && Array.isArray(sheet.tabs)) {
@@ -435,10 +462,33 @@ app.post("/api/chat", async (req: Request, res: Response) => {
             const rows = tab.rows || [];
             if (rows.length > 0) {
               sheetsContextText += `  Linhas:\n`;
+              let includedCount = 0;
+              let matchedCount = 0;
+
               rows.forEach((row: any, idx: number) => {
-                const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
-                sheetsContextText += `    [Resgistro ${idx + 1}] ${rowCells.join(", ")}\n`;
+                const rowCellsText = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`).join(" ").toLowerCase();
+                
+                // Se não usarmos filtragem (planilha pequena), ou se houver correspondência com algum termo de busca
+                const isMatch = !useSmartFiltering || searchTerms.length === 0 || searchTerms.some((term: string) => rowCellsText.includes(term));
+                
+                if (isMatch) {
+                  const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [Registro ${idx + 1}] ${rowCells.join(", ")}\n`;
+                  includedCount++;
+                  if (useSmartFiltering && searchTerms.length > 0) matchedCount++;
+                }
               });
+
+              // Se usou filtragem e não encontrou nada na aba, mostra as 5 primeiras linhas como amostra geral
+              if (useSmartFiltering && includedCount === 0) {
+                sheetsContextText += `    (Nenhuma linha correspondeu diretamente aos termos de busca: [${searchTerms.join(", ")}]. Exibindo primeiras linhas de amostra geral:)\n`;
+                rows.slice(0, 5).forEach((row: any, idx: number) => {
+                  const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [Registro ${idx + 1}] ${rowCells.join(", ")}\n`;
+                });
+              } else if (useSmartFiltering && matchedCount > 0) {
+                sheetsContextText += `    (Nota: Foram filtrados ${matchedCount} registros relevantes de um total de ${rows.length} desta aba para economizar limite de tokens)\n`;
+              }
             } else {
               sheetsContextText += `  (Esta aba está vazia)\n`;
             }
@@ -457,15 +507,15 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
     // 2. Build system instruction
     const systemInstruction = `Você é um Assistente Especialista de Consultas a Planilhas do evento/operação.
-Seu objetivo é dar respostas extremamente diretas, gentis, precisas e profissionais baseadas APENAS nos dados fornecidos de planilhas.
+Seu objetivo é dar respostas extremamente diretas, ultra-concisas, precisas e sem enrolação, baseadas APENAS nos dados fornecidos de planilhas. Poupe palavras e vá direto ao ponto.
 
 Regras fundamentais de resposta:
-1. Sempre indique em qual planilha, aba e registro você encontrou as informações buscadas (ex: "Conforme a aba 'Geral' da planilha 'Conselheiros'...").
-2. Caso encontre múltiplos resultados semelhantes, apresente-os de forma clara em tópicos com todos os detalhes disponíveis (ex: nome, contato, telefone, cargo, e-mail).
-3. Se a pergunta do usuário não contiver resposta nos dados das planilhas, diga de forma muito gentil e objetiva que não pôde encontrar essa informação específica nos dados carregados, mas mencione o que você encontrou de mais próximo caso haja algo parecido.
+1. Seja extremamente direto e conciso. Ao indicar a origem da informação, cite APENAS a aba específica de onde de fato extraiu o dado de forma direta (ex: "De acordo com a aba 'X': [sua resposta direta]"). Não faça introduções longas, não liste as outras abas existentes da planilha e não diga que a informação foi replicada em abas onde ela não foi de fato consultada.
+2. Caso encontre múltiplos resultados semelhantes, apresente-os de forma resumida e organizada em tópicos curtos com os detalhes relevantes.
+3. Se a pergunta do usuário não contiver resposta nos dados das planilhas, diga de forma ultra-direta que a informação não consta nas bases.
 4. NUNCA invente fatos ou dados. Mantenha os contatos e instruções exatamente como escritos nas tabelas.
-5. Se o usuário estiver perguntando sobre o que fazer em uma emergência ou descumprimento de fornecedor, cite exatamente os procedimentos (coluna 'O que fazer', 'Conduta', 'Procedimento' ou similar) e os contatos úteis e responsáveis listados.
-6. Responda em português brasileiro. Use um tom calmo, profissional e eficiente de organizador de evento corporativo de alto nível.
+5. Se o usuário estiver perguntando sobre o que fazer em uma emergência, descreva a conduta exata em poucas linhas e indique quem contatar de forma direta.
+6. Responda em português brasileiro com um tom altamente profissional, prático, objetivo e sem rodeios.
 `;
 
     // 3. Prepare Chat Prompt / Contents based on Provider
@@ -532,10 +582,16 @@ Regras fundamentais de resposta:
 
       let endpoint = "https://api.openai.com/v1/chat/completions";
       let defaultModel = "gpt-4o-mini";
+      let finalModel = apiModel;
 
       if (apiProvider === "groq") {
         endpoint = "https://api.groq.com/openai/v1/chat/completions";
         defaultModel = "llama-3.1-8b-instant";
+        if (finalModel === "llama-3.3-70b-versatile" || !finalModel) {
+          finalModel = "llama-3.1-8b-instant";
+        }
+      } else {
+        if (!finalModel) finalModel = defaultModel;
       }
 
       const response = await fetch(endpoint, {
@@ -545,7 +601,7 @@ Regras fundamentais de resposta:
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: apiModel || defaultModel,
+          model: finalModel,
           messages: messagesArray,
           temperature: 0.2
         })
