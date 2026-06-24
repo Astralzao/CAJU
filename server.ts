@@ -535,7 +535,7 @@ Regras fundamentais de resposta:
 
       if (apiProvider === "groq") {
         endpoint = "https://api.groq.com/openai/v1/chat/completions";
-        defaultModel = "llama-3.3-70b-versatile";
+        defaultModel = "llama-3.1-8b-instant";
       }
 
       const response = await fetch(endpoint, {

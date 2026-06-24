@@ -920,18 +920,18 @@ export default function App() {
                         }}
                         placeholder={
                           apiProvider === "gemini" ? "Ex: gemini-3.5-flash ou gemini-2.5-pro" :
-                          apiProvider === "groq" ? "Ex: llama-3.3-70b-versatile ou qwen-2.5-32b" :
+                          apiProvider === "groq" ? "Ex: llama-3.1-8b-instant ou mixtral-8x7b-32768" :
                           "Ex: gpt-4o-mini ou gpt-4o"
                         }
                         className="w-full bg-[#120D23] rounded-lg px-3 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
                       />
                     </div>
-
+                    
                     <div className="flex items-start gap-2.5 text-[11px] text-zinc-400 leading-relaxed bg-[#120D23]/50 p-3 rounded-lg border border-[#241B3E]">
                       <span className="text-amber-400 font-bold shrink-0">💡 Nota:</span>
                       <div className="text-zinc-300">
                         {apiProvider === "gemini" && "Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (process.env.GEMINI_API_KEY) rodando o modelo gemini-3.5-flash."}
-                        {apiProvider === "groq" && "O sistema usará a variável de ambiente GROQ_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é llama-3.3-70b-versatile, perfeito para ler tabelas."}
+                        {apiProvider === "groq" && "O sistema usará a variável de ambiente GROQ_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é llama-3.1-8b-instant, perfeito para responder rapidamente a grandes volumes de dados."}
                         {apiProvider === "openai" && "O sistema usará a variável de ambiente OPENAI_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é gpt-4o-mini."}
                       </div>
                     </div>
