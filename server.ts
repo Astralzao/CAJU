@@ -301,6 +301,116 @@ function checkAdminAuth(req: Request, res: Response, next: () => void) {
 // Ensure GEMINI_API_KEY is available or output a placeholder error
 const apiKey = process.env.GEMINI_API_KEY;
 
+// API Key Pool and Token Tracker for Gemini
+interface KeyStats {
+  keyIndex: number;
+  maskedKey: string;
+  successCount: number;
+  errorCount: number;
+  promptTokens: number;
+  candidatesTokens: number;
+  totalTokens: number;
+  lastUsed: string | null;
+  status: "active" | "rate_limited" | "invalid";
+  statusReason?: string;
+  cooldownUntil?: number; // timestamp
+}
+
+let geminiKeyPool: string[] = [];
+let geminiKeyStats: Record<number, KeyStats> = {};
+
+// Helper to initialize the pool
+function initGeminiKeyPool() {
+  const pool: string[] = [];
+  
+  // 1. Check GEMINI_API_KEY_1 to GEMINI_API_KEY_10
+  for (let i = 1; i <= 10; i++) {
+    const key = process.env[`GEMINI_API_KEY_${i}`];
+    if (key && key.trim()) {
+      pool.push(key.trim());
+    }
+  }
+  
+  // 2. Check comma-separated GEMINI_API_KEY
+  const mainKey = process.env.GEMINI_API_KEY || apiKey;
+  if (mainKey) {
+    if (mainKey.includes(",")) {
+      const parts = mainKey.split(",").map(k => k.trim()).filter(Boolean);
+      parts.forEach(part => {
+        if (!pool.includes(part)) {
+          pool.push(part);
+        }
+      });
+    } else {
+      if (mainKey.trim() && !pool.includes(mainKey.trim()) && mainKey !== "placeholder-key") {
+        pool.unshift(mainKey.trim());
+      }
+    }
+  }
+
+  // Deduplicate
+  geminiKeyPool = [...new Set(pool)];
+
+  // Initialize stats
+  geminiKeyPool.forEach((key, index) => {
+    if (!geminiKeyStats[index]) {
+      const masked = key.length > 10 
+        ? `${key.substring(0, 6)}...${key.substring(key.length - 4)}`
+        : "Chave curta";
+      geminiKeyStats[index] = {
+        keyIndex: index,
+        maskedKey: masked,
+        successCount: 0,
+        errorCount: 0,
+        promptTokens: 0,
+        candidatesTokens: 0,
+        totalTokens: 0,
+        lastUsed: null,
+        status: "active"
+      };
+    }
+  });
+
+  console.log(`🔑 Pool de Chaves Gemini carregado: ${geminiKeyPool.length} chaves configuradas.`);
+}
+
+function getNextAvailableGeminiKeyIndex(startIndex = 0): number {
+  if (geminiKeyPool.length === 0) return -1;
+  
+  const now = Date.now();
+  
+  // First, look for any active key that isn't cooling down, starting from startIndex
+  for (let i = 0; i < geminiKeyPool.length; i++) {
+    const index = (startIndex + i) % geminiKeyPool.length;
+    const stats = geminiKeyStats[index];
+    
+    if (stats.status === "active") {
+      return index;
+    }
+    
+    if (stats.cooldownUntil && now > stats.cooldownUntil) {
+      // Cooldown expired, restore status to active
+      stats.status = "active";
+      stats.statusReason = undefined;
+      stats.cooldownUntil = undefined;
+      return index;
+    }
+  }
+  
+  // If all are rate-limited, fallback to the one with the earliest cooldown expiration, or index 0
+  let bestIndex = 0;
+  let minCooldown = Infinity;
+  for (let i = 0; i < geminiKeyPool.length; i++) {
+    const stats = geminiKeyStats[i];
+    if (stats.cooldownUntil && stats.cooldownUntil < minCooldown) {
+      minCooldown = stats.cooldownUntil;
+      bestIndex = i;
+    }
+  }
+  
+  return bestIndex;
+}
+
 // Initialize GoogleGenAI SDK lazily/safely
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {
@@ -330,6 +440,17 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 // Server API Routes
 app.get("/api/health", (req: Request, res: Response) => {
   res.json({ status: "ok", mode: process.env.NODE_ENV || "development" });
+});
+
+// Endpoint to view API Key pool statistics
+app.get("/api/key-stats", (req: Request, res: Response) => {
+  if (geminiKeyPool.length === 0) {
+    initGeminiKeyPool();
+  }
+  res.json({
+    poolSize: geminiKeyPool.length,
+    stats: Object.values(geminiKeyStats)
+  });
 });
 
 // Authentication verify endpoint
@@ -646,26 +767,128 @@ Suas diretrizes de comportamento e resposta:
         parts: [{ text: userPromptWithContext }]
       });
 
-      // Initialize client for this request with the appropriate key
-      const ai = new GoogleGenAI({
-        apiKey: activeApiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
+      // If pool is not initialized, initialize it
+      if (geminiKeyPool.length === 0) {
+        initGeminiKeyPool();
+      }
+
+      // Check if we can rotate keys (if user did not supply a custom API Key via UI)
+      const isRotating = !customApiKey && geminiKeyPool.length > 0;
+      let success = false;
+      let lastError: any = null;
+      let replyText = "";
+
+      if (isRotating) {
+        let currentTry = 0;
+        let keyIndex = getNextAvailableGeminiKeyIndex(0); // Start lookup
+
+        while (currentTry < geminiKeyPool.length && !success) {
+          const currentKey = geminiKeyPool[keyIndex];
+          const stats = geminiKeyStats[keyIndex];
+
+          console.log(`🔄 [POOL] Tentando requisição com Chave #${keyIndex + 1} (${stats.maskedKey}). Tentativa ${currentTry + 1}/${geminiKeyPool.length}`);
+
+          try {
+            const ai = new GoogleGenAI({
+              apiKey: currentKey,
+              httpOptions: {
+                headers: {
+                  'User-Agent': 'aistudio-build',
+                }
+              }
+            });
+
+            const response = await ai.models.generateContent({
+              model: apiModel || "gemini-3.5-flash",
+              contents: formattedContents,
+              config: {
+                systemInstruction: systemInstruction,
+                temperature: 0.4,
+              }
+            });
+
+            // Update stats
+            stats.successCount++;
+            stats.lastUsed = new Date().toISOString();
+            stats.status = "active";
+            stats.statusReason = undefined;
+            stats.cooldownUntil = undefined;
+
+            if (response.usageMetadata) {
+              const inT = response.usageMetadata.promptTokenCount || 0;
+              const outT = response.usageMetadata.candidatesTokenCount || 0;
+              const totT = response.usageMetadata.totalTokenCount || 0;
+
+              stats.promptTokens += inT;
+              stats.candidatesTokens += outT;
+              stats.totalTokens += totT;
+
+              console.log(`📊 [GEMINI RAG USAGE - CHAVE #${keyIndex + 1}]`);
+              console.log(`   Tokens de Entrada (Contexto + Prompt): ${inT}`);
+              console.log(`   Tokens de Saída (Resposta da IA): ${outT}`);
+              console.log(`   Total de Tokens nesta consulta: ${totT}`);
+              console.log(`   Consumo Acumulado desta Chave: ${stats.totalTokens} tokens (Sucessos: ${stats.successCount})`);
+            }
+
+            replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+            success = true;
+          } catch (err: any) {
+            console.error(`❌ [POOL] Falha na Chave #${keyIndex + 1} (${stats.maskedKey}):`, err.message || err);
+            stats.errorCount++;
+            stats.lastUsed = new Date().toISOString();
+
+            // Check if rate limit (status 429 / resource exhausted / quota)
+            const errMsg = (err.message || "").toLowerCase();
+            if (errMsg.includes("429") || errMsg.includes("limit") || errMsg.includes("exhausted") || errMsg.includes("quota") || errMsg.includes("rate")) {
+              stats.status = "rate_limited";
+              stats.statusReason = "Rate limit excedido (429/Quota)";
+              stats.cooldownUntil = Date.now() + 60 * 1000; // 1 minute cooldown
+            } else {
+              stats.status = "invalid";
+              stats.statusReason = err.message || "Erro desconhecido";
+            }
+
+            lastError = err;
+            currentTry++;
+            // Try next key
+            keyIndex = getNextAvailableGeminiKeyIndex((keyIndex + 1) % geminiKeyPool.length);
           }
         }
-      });
 
-      const response = await ai.models.generateContent({
-        model: apiModel || "gemini-3.5-flash",
-        contents: formattedContents,
-        config: {
-          systemInstruction: systemInstruction,
-          temperature: 0.4, // Balanced temperature for both high accuracy in tabular data and analytical capabilities
+        if (!success) {
+          throw lastError || new Error("Todas as chaves do pool falharam ou estão limitadas.");
         }
-      });
 
-      reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+        reply = replyText;
+      } else {
+        // Fallback / Single Key path
+        const ai = new GoogleGenAI({
+          apiKey: activeApiKey,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            }
+          }
+        });
+
+        const response = await ai.models.generateContent({
+          model: apiModel || "gemini-3.5-flash",
+          contents: formattedContents,
+          config: {
+            systemInstruction: systemInstruction,
+            temperature: 0.4,
+          }
+        });
+
+        if (response.usageMetadata) {
+          console.log("📊 [GEMINI RAG USAGE - CHAVE ÚNICA/PERSONALIZADA]");
+          console.log(`   Tokens de Entrada (Contexto + Prompt): ${response.usageMetadata.promptTokenCount}`);
+          console.log(`   Tokens de Saída (Resposta da IA): ${response.usageMetadata.candidatesTokenCount}`);
+          console.log(`   Total de Tokens nesta consulta: ${response.usageMetadata.totalTokenCount}`);
+        }
+
+        reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+      }
     } else {
       // Format messages for OpenAI / Groq (OpenAI-compatible)
       const messagesArray: any[] = [

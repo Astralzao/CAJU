@@ -22,6 +22,7 @@ import {
   FileText,
   BadgeAlert,
   Key,
+  Layers,
   RefreshCw,
   X
 } from "lucide-react";
@@ -84,6 +85,35 @@ export default function App() {
 
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  // States for API Key pool monitoring
+  const [keyStats, setKeyStats] = useState<any[]>([]);
+  const [poolSize, setPoolSize] = useState<number>(0);
+  const [isLoadingStats, setIsLoadingStats] = useState<boolean>(false);
+
+  const fetchKeyStats = async () => {
+    try {
+      setIsLoadingStats(true);
+      const res = await fetch("/api/key-stats");
+      if (res.ok) {
+        const data = await res.json();
+        setKeyStats(data.stats || []);
+        setPoolSize(data.poolSize || 0);
+      }
+    } catch (e) {
+      console.error("Erro ao carregar estatísticas do pool de chaves:", e);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeAdminTab === "config") {
+      fetchKeyStats();
+      const interval = setInterval(fetchKeyStats, 10000); // refresh every 10s
+      return () => clearInterval(interval);
+    }
+  }, [activeAdminTab]);
 
   // Load spreadsheets from server
   const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string, forceUpdate?: boolean) => {
@@ -1097,6 +1127,95 @@ export default function App() {
                       </ol>
                     )}
                   </div>
+
+                  {/* Pool Tracker Component */}
+                  {apiProvider === "gemini" && (
+                    <div className="bg-[#120D23] border border-[#241B3E] p-5 rounded-2xl space-y-4 col-span-full">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                        <div>
+                          <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-[#D946EF] animate-pulse" />
+                            Pool de Chaves Gemini para Contingência & Monitoramento
+                          </h3>
+                          <p className="text-xs text-zinc-400 mt-1">
+                            Monitore o consumo de tokens e o estado operacional em tempo real de cada chave configurada no pool.
+                          </p>
+                        </div>
+                        
+                        <button
+                          onClick={fetchKeyStats}
+                          disabled={isLoadingStats}
+                          className="px-3 py-1.5 bg-[#1E1639] hover:bg-[#2A1F4E] border border-[#3E2D6B] text-[#D946EF] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStats ? "animate-spin" : ""}`} />
+                          Atualizar Pool
+                        </button>
+                      </div>
+
+                      {poolSize === 0 ? (
+                        <div className="p-4 bg-[#0B0616] rounded-xl border border-[#241B3E] text-center">
+                          <p className="text-xs text-zinc-500 italic">
+                            Nenhuma chave secundária de contingência foi encontrada nas variáveis de ambiente do servidor.<br/>
+                            Defina <code className="text-[#D946EF]">GEMINI_API_KEY_1</code>, <code className="text-[#D946EF]">GEMINI_API_KEY_2</code>, etc., no seu arquivo de ambiente para ativar o pool automático.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto border border-[#241B3E]/60 rounded-xl bg-[#0B0616]">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-[#241B3E] bg-[#120D23]/60 text-zinc-400 font-bold uppercase tracking-wider text-[10px]">
+                                <th className="p-3"># Chave</th>
+                                <th className="p-3">Identificador</th>
+                                <th className="p-3 text-center">Status</th>
+                                <th className="p-3 text-right">Sucessos</th>
+                                <th className="p-3 text-right">Erros</th>
+                                <th className="p-3 text-right">Tokens Entrada</th>
+                                <th className="p-3 text-right">Tokens Saída</th>
+                                <th className="p-3 text-right text-[#D946EF]">Tokens Totais</th>
+                                <th className="p-3 text-center">Último Uso</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#241B3E]/40">
+                              {keyStats.map((stat, i) => (
+                                <tr key={i} className="hover:bg-[#120D23]/30 transition text-zinc-300">
+                                  <td className="p-3 font-mono font-bold text-zinc-500">
+                                    {stat.keyIndex + 1}
+                                  </td>
+                                  <td className="p-3 font-mono text-zinc-400">
+                                    {stat.maskedKey}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                      stat.status === "active"
+                                        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                        : stat.status === "rate_limited"
+                                        ? "bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse"
+                                        : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                    }`}>
+                                      {stat.status === "active" ? "Ativo" : stat.status === "rate_limited" ? "Rate Limit" : "Inativo"}
+                                    </span>
+                                    {stat.statusReason && (
+                                      <span className="block text-[9px] text-rose-400 mt-0.5 truncate max-w-[150px] mx-auto" title={stat.statusReason}>
+                                        {stat.statusReason}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right font-bold">{stat.successCount}</td>
+                                  <td className="p-3 text-right text-rose-400 font-bold">{stat.errorCount}</td>
+                                  <td className="p-3 text-right font-mono text-zinc-400">{stat.promptTokens.toLocaleString()}</td>
+                                  <td className="p-3 text-right font-mono text-zinc-400">{stat.candidatesTokens.toLocaleString()}</td>
+                                  <td className="p-3 text-right font-mono text-[#D946EF] font-bold">{stat.totalTokens.toLocaleString()}</td>
+                                  <td className="p-3 text-center font-mono text-zinc-500">
+                                    {stat.lastUsed ? new Date(stat.lastUsed).toLocaleTimeString() : "-"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </>
