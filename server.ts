@@ -520,17 +520,31 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               let includedCount = 0;
               let matchedCount = 0;
 
+              const tabNameLower = (tab.name || "").toLowerCase();
+              const isCriticalTab = tabNameLower.includes("embaixador") || 
+                                    tabNameLower.includes("contato") || 
+                                    tabNameLower.includes("palestrante") || 
+                                    tabNameLower.includes("parceiro") || 
+                                    tabNameLower.includes("patrocinador") ||
+                                    tabNameLower.includes("remela") ||
+                                    tabNameLower.includes("diretoria") ||
+                                    tabNameLower.includes("hino");
+
               rows.forEach((row: any, idx: number) => {
                 const rowCellsText = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`).join(" ").toLowerCase();
                 
-                // Se não usarmos filtragem (planilha pequena), ou se houver correspondência com algum termo de busca
-                const isMatch = !useSmartFiltering || searchTerms.length === 0 || searchTerms.some((term: string) => rowCellsText.includes(term));
+                // Se for aba crítica de contatos/embaixadores/palestrantes, incluímos sempre.
+                // Caso contrário, verificamos correspondência com algum termo de busca.
+                const isMatch = !useSmartFiltering || 
+                                isCriticalTab || 
+                                searchTerms.length === 0 || 
+                                searchTerms.some((term: string) => rowCellsText.includes(term));
                 
                 if (isMatch) {
                   const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
                   sheetsContextText += `    [Registro ${idx + 1}] ${rowCells.join(", ")}\n`;
                   includedCount++;
-                  if (useSmartFiltering && searchTerms.length > 0) matchedCount++;
+                  if (useSmartFiltering && !isCriticalTab && searchTerms.length > 0) matchedCount++;
                 }
               });
 
@@ -573,14 +587,15 @@ Suas diretrizes de comportamento e resposta:
 
 2. DIRETRIZ CRÍTICA DE RESOLUÇÃO (EMBAIXADORES E AUTONOMIA DO STAFF):
    - Ao sugerir qualquer solução, plano de contingência, análise de riscos ou resposta a um incidente/problema, você deve OBRIGATORIAMENTE indicar no INÍCIO da resposta os nomes dos responsáveis/embaixadores relevantes encontrados na aba "EMBAIXADORES" ou contatos das planilhas.
-   - REGRA DE PALESTRANTES E MARCAS EXTERNAS: Quando a dúvida, situação ou problema envolver palestrantes, marcas, patrocinadores, fornecedores ou grupos externos (fora da rede RN Junior e das EJs listadas), os responsáveis diretos são os membros da organização carinhosamente chamados de 'Remelas' ou contatos indicados na aba 'PARCEIROS' (or 'PATROCINADORES' / parceiros de marcas). Indique esses contatos/responsáveis como prioritários nesses casos.
+   - REGRA DE PALESTRANTES E MARCAS EXTERNAS: Quando a dúvida, situação ou problema envolver palestrantes, marcas, patrocinadores, fornecedores ou grupos externos (como Gentil, Grupo QRZ, ou qualquer outro palestrante/patrocinador listado ou citado), você deve procurar ativamente na planilha (especialmente nas abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e números de telefone dos membros da organização chamados carinhosamente de 'Remelas' (como os responsáveis por Conteúdo, Comercial, Parcerias, Marcas ou Comercial/Parcerias) ou contatos correspondentes a essa marca/palestra. Você deve OBRIGATORIAMENTE listar os nomes reais e telefones exatos desses responsáveis/embaixadores no cabeçalho inicial de contatos, em vez de usar descrições ou atribuições genéricas.
    - ATENÇÃO: Trate a presença física do embaixador ou responsável como uma possibilidade. Em casos críticos/graves, a presença dele é certa. No entanto, em casos menos graves ou urgentes, o staff pode ter que resolver a situação de forma autônoma, seja recebendo apenas direcionamentos rápidos via rádio, ou até mesmo sem conseguir contato imediato.
    - Portanto, NÃO condicione todo o plano de ação à presença física ou ação exclusiva do embaixador/responsável. O plano deve dar total autonomia técnica e prática ao usuário/staff na linha de frente para que consiga agir de imediato e de forma independente, utilizando as diretrizes e metodologias descritas na resposta.
    - PROIBIÇÃO DE METATEXTOS E EXPLICAÇÕES DE REGRAS: Nunca crie seções, títulos ou parágrafos para justificar as regras do prompt ou a autonomia do staff (por exemplo, é TERMINANTEMENTE PROIBIDO gerar textos como "ESCLARECIMENTO SOBRE AUTONOMIA:", "Esta diretriz visa dar total autonomia...", ou introduções de bastidores). Vá direto aos contatos e depois diretamente para o plano prático.
    - Se a situação não puder ser resolvida imediatamente de forma autônoma pelo usuário, adicione apenas uma frase curta e extremamente discreta junto ao cabeçalho ou no final (ex: "Se a situação não for resolvida imediatamente, entre em contato com os responsáveis acima.").
-   - Exemplo de cabeçalho inicial de contatos (respeitando as regras de formatação sem markdown):
+   - Exemplo de cabeçalho inicial de contatos contendo dados reais encontrados na planilha (respeitando as regras de formatação sem markdown):
      RESPONSÁVEIS DE EMBAIXADORES PARA ESTA SITUAÇÃO:
-     - [Nome] (Atribuição/Segmento): [Instrução ou contato se disponível]
+     - [Nome real encontrado na planilha] ([Cargo/Atribuição/Segmento]): [Número de telefone real da planilha ou instrução]
+     - [Outro nome real, se houver] ([Cargo]): [Telefone/Contato]
 
 3. AUTONOMIA ANALÍTICA E CONHECIMENTO GERAL (RESOLUÇÃO E RISCOS):
    - Quando o usuário solicitar auxílio para resolver problemas, analisar riscos ou planejar ações que vão além dos dados exatos das planilhas, use ativamente seu conhecimento geral e metodologias profissionais reconhecidas (ex: Matriz SWOT/FOFA, Matriz de Risco/Probabilidade x Impacto, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil, PMBOK, etc.).

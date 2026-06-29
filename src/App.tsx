@@ -22,7 +22,8 @@ import {
   FileText,
   BadgeAlert,
   Key,
-  RefreshCw
+  RefreshCw,
+  X
 } from "lucide-react";
 
 export default function App() {
@@ -82,6 +83,7 @@ export default function App() {
   const [isVerifyingLogin, setIsVerifyingLogin] = useState<boolean>(false);
 
   const [sheetError, setSheetError] = useState<string | null>(null);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
   // Load spreadsheets from server
   const fetchSpreadsheets = async (overrideUrl?: string, overrideTabs?: string, forceUpdate?: boolean) => {
@@ -318,19 +320,19 @@ export default function App() {
     return (
       <div className="w-full h-screen flex flex-col bg-[#0B0616] text-slate-100 font-sans antialiased overflow-hidden" id="embed-chat-root">
         {/* Header */}
-        <div className="bg-[#120D23] border-b border-[#241B3E] p-4 flex items-center justify-between shadow-md shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 to-[#D946EF] flex items-center justify-center border border-pink-400/30 shadow-[0_0_15px_rgba(217,70,239,0.15)]">
-              <Bot className="w-5 h-5 text-white" />
+        <div className="bg-[#120D23] border-b border-[#241B3E] p-3 sm:p-4 flex items-center justify-between shadow-md shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-pink-500 to-[#D946EF] flex items-center justify-center border border-pink-400/30 shadow-[0_0_15px_rgba(217,70,239,0.15)] shrink-0">
+              <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
-            <div>
-              <h1 className="text-sm font-black text-white tracking-wide uppercase font-display flex items-center gap-1.5">
-                <span>Suporte Digital • DESTINE 26</span>
-                <Sparkle className="w-3.5 h-3.5 text-pink-400 fill-pink-400 animate-pulse" />
+            <div className="min-w-0">
+              <h1 className="text-xs sm:text-sm font-black text-white tracking-wide uppercase font-display flex items-center gap-1">
+                <span className="truncate">Suporte • DESTINE 26</span>
+                <Sparkle className="w-3 h-3 text-pink-400 fill-pink-400 animate-pulse shrink-0" />
               </h1>
-              <p className="text-[10px] text-zinc-400 flex items-center gap-1 mt-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-pulse"></span>
-                Base Operacional Ativa • {totalSheets} Fontes Integradas
+              <p className="text-[9px] sm:text-[10px] text-zinc-400 flex items-center gap-1 mt-0.5 truncate">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D946EF] animate-pulse shrink-0"></span>
+                Base Ativa • {totalSheets} Fontes
               </p>
             </div>
           </div>
@@ -338,36 +340,36 @@ export default function App() {
           {messages.length > 0 && (
             <button 
               onClick={handleClearHistory}
-              className="text-[10px] text-zinc-400 hover:text-[#D946EF] bg-[#0B0616] border border-[#241B3E] hover:border-[#D946EF]/20 px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer"
+              className="text-[9px] sm:text-[10px] text-zinc-400 hover:text-[#D946EF] bg-[#0B0616] border border-[#241B3E] hover:border-[#D946EF]/20 px-2 sm:px-2.5 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer shrink-0"
             >
-              <Trash2 className="w-3.5 h-3.5" /> Limpar Histórico
+              <Trash2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span className="hidden sm:inline">Limpar Histórico</span><span className="sm:hidden">Limpar</span>
             </button>
           )}
         </div>
 
         {/* Scrollable messages box */}
-        <div className="flex-1 p-4 md:p-6 overflow-y-auto space-y-4 bg-[#0B0616]" style={{ backgroundImage: "radial-gradient(circle at top right, rgba(217, 70, 239, 0.02) 0%, rgba(11, 6, 22, 0) 60%)" }}>
+        <div className="flex-1 p-3 sm:p-4 md:p-6 overflow-y-auto space-y-4 bg-[#0B0616]" style={{ backgroundImage: "radial-gradient(circle at top right, rgba(217, 70, 239, 0.02) 0%, rgba(11, 6, 22, 0) 60%)" }}>
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center space-y-4 max-w-md mx-auto px-4">
-              <div className="w-16 h-16 rounded-2xl bg-pink-500/10 flex items-center justify-center border border-[#D946EF]/20 shadow-[0_0_20px_rgba(217,70,239,0.1)] animate-bounce">
-                <Bot className="w-8 h-8 text-[#D946EF]" />
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl bg-pink-500/10 flex items-center justify-center border border-[#D946EF]/20 shadow-[0_0_20px_rgba(217,70,239,0.1)] animate-bounce">
+                <Bot className="w-6 h-6 sm:w-8 sm:h-8 text-[#D946EF]" />
               </div>
               <div className="space-y-1.5">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Como posso ajudar você hoje?</h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
+                <h3 className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">Como posso ajudar você hoje?</h3>
+                <p className="text-[11px] sm:text-xs text-zinc-400 leading-relaxed">
                   Consulte informações operacionais, horários de plantão, contatos de conselheiros e rotas médicas instantaneamente de forma segura.
                 </p>
               </div>
-              <div className="flex flex-col gap-2 w-full pt-3">
+              <div className="flex flex-col gap-2 w-full pt-2">
                 <button 
                   onClick={() => handleSendMessage("Quem é o conselheiro da Adm Consult e qual o contato dele?")}
-                  className="w-full text-left p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
+                  className="w-full text-left p-2.5 sm:p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-[11px] sm:text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
                 >
                   🏥 "Quem é o conselheiro da Adm Consult?"
                 </button>
                 <button 
                   onClick={() => handleSendMessage("O que fazer em caso de congressista passando mal no Pavilhão A?")}
-                  className="w-full text-left p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
+                  className="w-full text-left p-2.5 sm:p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-[11px] sm:text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
                 >
                   🚨 "Congressista passando mal: qual protocolo?"
                 </button>
@@ -380,7 +382,7 @@ export default function App() {
                 className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
               >
                 <span className="text-[9px] text-[#D946EF]/70 mb-1 px-1">{msg.role === "user" ? "Você" : "Assistente"} • {msg.timestamp}</span>
-                <div className={`p-3.5 rounded-2xl text-xs leading-relaxed max-w-[85%] md:max-w-[75%] ${
+                <div className={`p-3 sm:p-3.5 rounded-2xl text-[11px] sm:text-xs leading-relaxed max-w-[85%] md:max-w-[75%] ${
                   msg.role === "user" 
                     ? "bg-[#D946EF]/10 text-pink-200 border border-[#D946EF]/30 rounded-tr-none" 
                     : "bg-[#120D23] border border-[#241B3E] text-zinc-200 rounded-tl-none shadow-sm"
@@ -409,7 +411,7 @@ export default function App() {
         </div>
 
         {/* Input box */}
-        <div className="p-4 bg-[#120D23] border-t border-[#241B3E] shrink-0">
+        <div className="p-3 sm:p-4 bg-[#120D23] border-t border-[#241B3E] shrink-0">
           <form 
             onSubmit={(e) => {
               e.preventDefault();
@@ -418,7 +420,7 @@ export default function App() {
                 setWidgetInput("");
               }
             }}
-            className="flex gap-2 max-w-4xl mx-auto"
+            className="flex gap-2 max-w-4xl mx-auto w-full"
           >
             <input
               type="text"
@@ -426,12 +428,12 @@ export default function App() {
               onChange={(e) => setWidgetInput(e.target.value)}
               placeholder="Digite sua dúvida operacional aqui..."
               disabled={isGenerating}
-              className="flex-1 bg-[#0B0616] rounded-xl px-4 py-3 text-xs border border-[#241B3E] text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#D946EF] focus:border-[#D946EF] transition"
+              className="flex-1 bg-[#0B0616] rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-[11px] sm:text-xs border border-[#241B3E] text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#D946EF] focus:border-[#D946EF] transition min-w-0"
             />
             <button
               type="submit"
               disabled={isGenerating || !widgetInput.trim()}
-              className="p-3 rounded-xl bg-gradient-to-r from-pink-500 to-[#D946EF] hover:opacity-90 text-slate-950 disabled:bg-slate-800 disabled:text-zinc-600 transition shrink-0 flex items-center justify-center cursor-pointer"
+              className="p-2.5 sm:p-3 rounded-xl bg-gradient-to-r from-pink-500 to-[#D946EF] hover:opacity-90 text-slate-950 disabled:bg-slate-800 disabled:text-zinc-600 transition shrink-0 flex items-center justify-center cursor-pointer"
             >
               <Send className="w-4 h-4 text-white" />
             </button>
@@ -445,10 +447,108 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0616] text-slate-100 font-sans antialiased flex" id="app-root">
+    <div className="h-screen bg-[#0B0616] text-slate-100 font-sans antialiased flex flex-col md:flex-row overflow-hidden" id="app-root">
       
-      {/* PERFECT REPLICA OF THE DESTINE 26 PORTAL DO STAFF SIDEBAR */}
-      <aside className="w-64 border-r border-[#241B3E] bg-[#120D23] flex flex-col justify-between shrink-0 select-none" id="sidebar-portal">
+      {/* MOBILE TOP BAR NAVIGATION */}
+      <header className="md:hidden bg-[#120D23] border-b border-[#241B3E] px-4 py-3 flex items-center justify-between shrink-0 sticky top-0 z-40" id="mobile-top-bar">
+        <div className="flex items-center gap-2">
+          <h1 className="text-[#D946EF] font-black tracking-wider text-base uppercase font-display flex items-center gap-1.5">
+            <span>DESTINE 26</span>
+            <Sparkle className="w-3.5 h-3.5 text-pink-400 animate-pulse fill-pink-400" />
+          </h1>
+          <span className="text-[9px] text-zinc-400 uppercase tracking-widest font-bold">
+            Portal
+          </span>
+        </div>
+        
+        <button
+          onClick={() => setIsMobileSidebarOpen(true)}
+          className="p-1.5 rounded-lg bg-[#0B0616] border border-[#241B3E] hover:border-[#D946EF]/20 text-zinc-200 transition flex items-center justify-center cursor-pointer"
+          title="Abrir Menu"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7" />
+          </svg>
+        </button>
+      </header>
+
+      {/* MOBILE SIDEBAR DRAWER (OVERLAY) */}
+      {isMobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden" id="mobile-sidebar-drawer">
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300" 
+            onClick={() => setIsMobileSidebarOpen(false)}
+          />
+          <aside className="relative w-64 max-w-xs bg-[#120D23] h-full flex flex-col justify-between p-0 shadow-2xl border-r border-[#241B3E] animate-slide-in-left" id="sidebar-portal-mobile">
+            <div className="flex flex-col">
+              <div className="p-5 border-b border-[#241B3E]/60 flex items-center justify-between">
+                <div>
+                  <h1 className="text-[#D946EF] font-black tracking-wider text-lg uppercase font-display flex items-center gap-1.5">
+                    <span>DESTINE 26</span>
+                    <Sparkle className="w-4 h-4 text-pink-400 animate-pulse fill-pink-400" />
+                  </h1>
+                  <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold">
+                    Portal do Staff
+                  </span>
+                </div>
+                <button 
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                  className="p-1 text-zinc-400 hover:text-white rounded-lg transition hover:bg-[#241B3E]"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <nav className="p-3 space-y-1">
+                <p className="px-3 py-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest pt-4">
+                  Base da Inteligência
+                </p>
+
+                <button
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                  className="w-full px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between bg-gradient-to-r from-[#D946EF]/25 to-[#D946EF]/5 border-l-4 border-[#D946EF] text-[#D946EF]"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Bot className="w-4 h-4 text-[#D946EF]" />
+                    <span>Alimentação IA (Planilhas)</span>
+                  </div>
+                  <span className="text-[9px] bg-[#D946EF]/20 text-pink-300 font-extrabold uppercase px-1.5 py-0.5 rounded-full shrink-0">
+                    Ativo
+                  </span>
+                </button>
+              </nav>
+            </div>
+
+            <div className="p-4 border-t border-[#241B3E]/60 bg-[#0E0B1B]/80 flex items-center justify-between">
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-white truncate">
+                  {isAdminLoggedIn ? "luismariofilho@gmail.com" : "Visitante Anônimo"}
+                </span>
+                <span className={`text-[9px] font-extrabold uppercase mt-0.5 px-2 py-0.5 rounded-full w-fit ${
+                  isAdminLoggedIn ? "bg-[#D946EF]/10 text-[#D946EF] border border-[#D946EF]/20" : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
+                }`}>
+                  {isAdminLoggedIn ? "Staff Autenticado" : "Acesso Visitante"}
+                </span>
+              </div>
+              
+              {isAdminLoggedIn && (
+                <button 
+                  onClick={() => {
+                    handleAdminLogout();
+                    setIsMobileSidebarOpen(false);
+                  }}
+                  className="p-1 px-2.5 text-zinc-500 hover:text-rose-400 transition cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* PERFECT REPLICA OF THE DESTINE 26 PORTAL DO STAFF SIDEBAR (DESKTOP) */}
+      <aside className="w-64 border-r border-[#241B3E] bg-[#120D23] hidden md:flex flex-col justify-between shrink-0 select-none h-screen sticky top-0" id="sidebar-portal">
         
         <div className="flex flex-col">
           {/* Logo Heading Header */}
@@ -509,10 +609,10 @@ export default function App() {
       </aside>
 
       {/* MAIN VIEWPORT BODY CONTAINER */}
-      <main className="flex-1 flex flex-col min-w-0 bg-[#0B0616]" style={{ backgroundImage: "radial-gradient(circle at top right, rgba(217, 70, 239, 0.03) 0%, rgba(11, 6, 22, 0) 60%)" }}>
+      <main className="flex-1 flex flex-col min-w-0 bg-[#0B0616] h-full overflow-hidden" style={{ backgroundImage: "radial-gradient(circle at top right, rgba(217, 70, 239, 0.03) 0%, rgba(11, 6, 22, 0) 60%)" }}>
         
         {/* VIEW: THE EXPERT IA BASE WORKSPACE (UPLOAD, TABLE BUILDERS & REVOLUTIONARY LOVABLE GUIDE) */}
-        <div className="p-6 md:p-8 space-y-6 overflow-y-auto max-h-screen">
+        <div className="p-4 sm:p-6 md:p-8 space-y-6 overflow-y-auto flex-1 h-full">
           
           {!isAdminLoggedIn ? (
             <div className="flex flex-col items-center justify-center py-20 px-4 max-w-md mx-auto text-center space-y-6" id="auth-gate-box">
@@ -1007,11 +1107,11 @@ export default function App() {
       </main>
 
       {/* ABSOLUTE FLOATING CHAT WIDGET - Bottom Right Corner */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3" id="floating-widget-wrapper">
+      <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 flex flex-col items-end gap-3 max-w-[calc(100vw-2rem)]" id="floating-widget-wrapper">
         
         {/* Expanded Chat Widget window */}
         {isWidgetOpen && (
-          <div className="w-[380px] sm:w-[420px] h-[580px] bg-[#120D23] border border-[#D946EF]/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 scale-100 origin-bottom-right" id="widget-box-frame">
+          <div className="w-[280px] min-[360px]:w-[320px] min-[420px]:w-[360px] sm:w-[420px] h-[480px] sm:h-[580px] bg-[#120D23] border border-[#D946EF]/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 scale-100 origin-bottom-right" id="widget-box-frame">
             
             {/* Widget Header with clean styling */}
             <div className="bg-gradient-to-r from-[#D946EF] via-pink-600 to-[#9d17aa] p-4 flex items-center justify-between shadow-lg">

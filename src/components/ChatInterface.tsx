@@ -73,16 +73,16 @@ export default function ChatInterface({
   };
 
   return (
-    <div className="flex flex-col bg-white rounded-xl border border-slate-100 shadow-sm h-[600px] overflow-hidden" id="chat-interface">
+    <div className="flex flex-col bg-white rounded-xl border border-slate-100 shadow-sm h-[500px] sm:h-[600px] overflow-hidden w-full" id="chat-interface">
       {/* Mini Header */}
-      <div className="bg-slate-50/50 border-b border-slate-50 px-5 py-3.5 flex items-center justify-between shrink-0" id="chat-header">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
+      <div className="bg-slate-50/50 border-b border-slate-50 px-3 sm:px-5 py-3 flex items-center justify-between shrink-0 gap-2" id="chat-header">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg shrink-0">
             <Bot className="w-4 h-4" />
           </div>
-          <div>
-            <h3 className="text-xs font-bold text-slate-800">Assistente IA de Planilhas</h3>
-            <p className="text-[10px] text-slate-500 font-medium">Buscando respostas nos registros ativos</p>
+          <div className="min-w-0">
+            <h3 className="text-xs font-bold text-slate-800 truncate">Assistente IA de Planilhas</h3>
+            <p className="text-[9px] sm:text-[10px] text-slate-500 font-medium truncate">Buscando respostas nos registros ativos</p>
           </div>
         </div>
 
@@ -90,15 +90,15 @@ export default function ChatInterface({
           <button
             id="btn-clear-chat"
             onClick={onClearHistory}
-            className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-rose-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition"
+            className="flex items-center gap-1 text-[10px] sm:text-[11px] text-slate-400 hover:text-rose-600 font-medium px-2 py-1.5 rounded-lg hover:bg-rose-50 transition shrink-0 cursor-pointer"
           >
-            <Trash2 className="w-3.5 h-3.5" /> Limpar Conversa
+            <Trash2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Limpar Conversa</span><span className="sm:hidden">Limpar</span>
           </button>
         )}
       </div>
 
       {/* Main Conversation Logs */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-slate-50/30 mini-scrollbar" id="chat-scroller">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 bg-slate-50/30 mini-scrollbar" id="chat-scroller">
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-sm mx-auto space-y-4" id="chat-welcome-state">
             <div className="w-12 h-12 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-600">

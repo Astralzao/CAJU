@@ -220,14 +220,14 @@ export default function SpreadsheetViewer({ spreadsheets, onDeleteSheet, onUpdat
       )}
 
       {/* Sheet Tabs */}
-      <div className="border-b border-slate-100 px-4 bg-white flex items-center justify-between shrink-0 overflow-x-auto gap-2" id="viewer-tabs">
-        <div className="flex space-x-1 py-2">
+      <div className="border-b border-slate-100 px-4 bg-white flex flex-col sm:flex-row sm:items-center justify-between shrink-0 gap-3 py-2" id="viewer-tabs">
+        <div className="flex space-x-1 overflow-x-auto mini-scrollbar pb-1 sm:pb-0 scroll-smooth w-full sm:w-auto" style={{ WebkitOverflowScrolling: "touch" }}>
           {currentSheet?.tabs.map((tab) => (
             <button
               id={`tab-select-${tab.name}`}
               key={tab.name}
               onClick={() => handleTabChange(tab.name)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
                 (activeTabName === tab.name || (!activeTabName && currentSheet?.tabs[0]?.name === tab.name))
                   ? "bg-slate-100 text-slate-800 font-bold"
                   : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
@@ -246,7 +246,7 @@ export default function SpreadsheetViewer({ spreadsheets, onDeleteSheet, onUpdat
         <button
           id="btn-trigger-add-row"
           onClick={startAddRow}
-          className="text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
+          className="text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 px-3 py-1.5 rounded-lg flex items-center justify-center gap-1 transition shrink-0 w-full sm:w-auto cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" /> Adicionar Linha
         </button>

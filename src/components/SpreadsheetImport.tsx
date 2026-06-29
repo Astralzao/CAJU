@@ -275,19 +275,19 @@ export default function SpreadsheetImport({ onImport }: SpreadsheetImportProps) 
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5 space-y-4" id="import-container">
-      <div className="flex items-center justify-between">
+    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 sm:p-5 space-y-4" id="import-container">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-50 pb-3 sm:pb-0 sm:border-0">
         <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2" id="import-title">
           <Plus className="w-4 h-4 text-emerald-500" /> Alimentar Nova Planilha
         </h3>
         
         {/* Nav sub-tabs */}
-        <div className="flex bg-slate-50 p-1 rounded-lg text-xs" id="import-nav">
+        <div className="flex bg-slate-100/80 p-1 rounded-lg text-xs w-full sm:w-auto overflow-x-auto mini-scrollbar shrink-0" id="import-nav">
           <button
             id="tab-btn-file"
             onClick={() => { setActiveTab("file"); setStatus(null); }}
-            className={`px-3 py-1.5 rounded-md font-medium transition ${
-              activeTab === "file" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-700"
+            className={`flex-1 sm:flex-initial text-center px-2.5 sm:px-3 py-1.5 rounded-md font-medium transition whitespace-nowrap cursor-pointer ${
+              activeTab === "file" ? "bg-white text-slate-800 shadow-xs font-bold" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             Upload Arquivo
@@ -295,8 +295,8 @@ export default function SpreadsheetImport({ onImport }: SpreadsheetImportProps) 
           <button
             id="tab-btn-paste"
             onClick={() => { setActiveTab("paste"); setStatus(null); }}
-            className={`px-3 py-1.5 rounded-md font-medium transition ${
-              activeTab === "paste" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-700"
+            className={`flex-1 sm:flex-initial text-center px-2.5 sm:px-3 py-1.5 rounded-md font-medium transition whitespace-nowrap cursor-pointer ${
+              activeTab === "paste" ? "bg-white text-slate-800 shadow-xs font-bold" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             Copiar/Colar CSV
@@ -304,11 +304,11 @@ export default function SpreadsheetImport({ onImport }: SpreadsheetImportProps) 
           <button
             id="tab-btn-link"
             onClick={() => { setActiveTab("link"); setStatus(null); }}
-            className={`px-3 py-1.5 rounded-md font-medium transition ${
-              activeTab === "link" ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-700"
+            className={`flex-1 sm:flex-initial text-center px-2.5 sm:px-3 py-1.5 rounded-md font-medium transition whitespace-nowrap cursor-pointer ${
+              activeTab === "link" ? "bg-white text-slate-800 shadow-xs font-bold" : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            Link Google Sheets
+            Google Sheets
           </button>
         </div>
       </div>
