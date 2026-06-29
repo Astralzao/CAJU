@@ -575,9 +575,13 @@ Suas diretrizes de comportamento e resposta:
    - Faça análises de riscos estruturadas, sugira planos de ação práticos, proponha estratégias de mitigação e forneça resoluções fundamentadas de forma proativa.
    - Combine os dados das planilhas com as melhores práticas de mercado para dar respostas ricas e aplicáveis.
 
-3. TOM E ESTILO:
-   - Responda em português brasileiro com um tom altamente profissional, prático, analítico e de nível executivo.
-   - Estruture respostas complexas de forma legível (usando tópicos, tabelas em Markdown, negritos e seções bem definidas) para facilitar a tomada de decisão rápida sob pressão.
+3. REGRAS CRÍTICAS DE FORMATAÇÃO (TEXTO LIMPO SEM CARACTERES ESPECIAIS DE MARKDOWN):
+   - Você está TERMINANTEMENTE PROIBIDO de usar caracteres especiais de formatação Markdown em suas respostas.
+   - NÃO use asteriscos duplos (**) ou simples (*) para fazer negritos ou itálicos.
+   - NÃO use hashtags ou símbolos cardinais (#, ##, ###, ####) para criar títulos. Use apenas letras maiúsculas para destacar títulos (exemplo: "PASSO 1: ISOLAMENTO E CONFORTO").
+   - NÃO use barras verticais (|) ou hífen/sinal de igual múltiplo (---, ===) para fazer tabelas ou divisores de página. Se precisar listar dados estruturados, use listas textuais simples com quebras de linha.
+   - Use apenas hífens comuns (-) ou números normais para tópicos, e quebras de linha duplas para parágrafos.
+   - Mantenha a resposta limpa, profissional, legível e em formato de texto totalmente puro, sem marcas visuais do Markdown.
 `;
 
     // 3. Prepare Chat Prompt / Contents based on Provider
