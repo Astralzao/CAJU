@@ -482,6 +482,13 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       .split(/\s+/)
       .filter((term: string) => term.length > 2 && !["dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", "nas", "aos", "aas"].includes(term));
 
+    const normalizeText = (text: string) => {
+      return text
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    };
+
     // 2. Format Sheet Data for the prompt context with smart filtering (RAG)
     let sheetsContextText = "";
     if (sheets && Array.isArray(sheets) && sheets.length > 0) {
@@ -499,7 +506,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         }
       });
 
-      const useSmartFiltering = totalLinesInAllSheets > 25;
+      const useSmartFiltering = totalLinesInAllSheets > 1500;
 
       sheets.forEach((sheet: any) => {
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
@@ -521,7 +528,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               let matchedCount = 0;
 
               const tabNameLower = (tab.name || "").toLowerCase();
-              const isCriticalTab = tabNameLower.includes("embaixador") || 
+              const normalizedTabName = normalizeText(tab.name || "");
+              const isTabTargeted = searchTerms.some((term: string) => {
+                const normTerm = normalizeText(term);
+                return normTerm.length > 3 && (normalizedTabName.includes(normTerm) || normTerm.includes(normalizedTabName));
+              });
+
+              const isCriticalTab = isTabTargeted ||
+                                    tabNameLower.includes("embaixador") || 
                                     tabNameLower.includes("contato") || 
                                     tabNameLower.includes("palestrante") || 
                                     tabNameLower.includes("parceiro") || 
