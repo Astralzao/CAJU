@@ -372,9 +372,16 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
   const spreadsheetId = process.env.GOOGLE_SHEETS_LOG_SPREADSHEET_ID;
 
   if (!clientEmail || !privateKey || !spreadsheetId) {
-    // Google Sheets logging is not configured; skip silently
+    console.log("⚠️ [GOOGLE SHEETS LOG] Envio ignorado. Faltando variáveis de ambiente:", {
+      GOOGLE_CLIENT_EMAIL: clientEmail ? "Configurado ✅" : "AUSENTE ❌",
+      GOOGLE_PRIVATE_KEY: privateKey ? "Configurado ✅" : "AUSENTE ❌",
+      GOOGLE_SHEETS_LOG_SPREADSHEET_ID: spreadsheetId ? "Configurado ✅" : "AUSENTE ❌"
+    });
+    console.log("👉 Lembre-se: Após configurar as variáveis de ambiente no painel da Vercel, você PRECISA realizar um novo Deploy (Redeploy) para que as alterações tenham efeito.");
     return;
   }
+
+  console.log(`⏳ [GOOGLE SHEETS LOG] Iniciando envio da transação ${tx.id} para a planilha: ${spreadsheetId}`);
 
   try {
     // Process private key to restore newline characters (common issue with Vercel env vars)
@@ -399,11 +406,12 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
       if (checkRes.data.values && checkRes.data.values.length > 0) {
         hasHeaders = true;
       }
-    } catch (readErr) {
-      // If we fail to read, assume headers are not written or sheet is completely blank
+    } catch (readErr: any) {
+      console.log(`ℹ️ [GOOGLE SHEETS LOG] Não foi possível ler cabeçalhos (pode ser planilha vazia): ${readErr.message || readErr}`);
     }
 
     if (!hasHeaders) {
+      console.log("📝 [GOOGLE SHEETS LOG] Escrevendo linha de cabeçalhos na planilha...");
       const headers = [
         "ID da Transação",
         "Data/Hora (UTC)",
@@ -458,6 +466,7 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
     console.log(`✅ [GOOGLE SHEETS LOG] Transação ${tx.id} enviada para a planilha com sucesso.`);
   } catch (err: any) {
     console.error("❌ [GOOGLE SHEETS LOG] Falha ao enviar transação para o Google Sheets:", err.message || err);
+    console.error("💡 Dica: Verifique se o e-mail da conta de serviço está como editor na planilha e se a chave privada está correta.");
   }
 }
 
