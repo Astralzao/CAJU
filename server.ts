@@ -329,6 +329,7 @@ interface QueryTransaction {
   timestamp: string;
   deviceSessionId: string;
   userQuery: string;
+  agentResponse?: string;
   model: string;
   promptTokens: number;
   candidatesTokens: number;
@@ -416,6 +417,7 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
         "Data/Hora (UTC)",
         "ID da Sessão (Dispositivo)",
         "Pergunta do Usuário",
+        "Resposta do Agente",
         "Modelo Utilizado",
         "Tokens de Entrada",
         "Tokens de Saída",
@@ -440,6 +442,7 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
       tx.timestamp,
       tx.deviceSessionId,
       tx.userQuery,
+      tx.agentResponse || "",
       tx.model,
       tx.promptTokens,
       tx.candidatesTokens,
@@ -455,7 +458,7 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: "A:K",
+      range: "A:L",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [row],
@@ -1053,8 +1056,18 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 - Se a situação exigir escalonamento urgente, inclua no final: "Se a situação não for resolvida imediatamente, entre em contato com os responsáveis acima."
 - PROIBIÇÃO DE METATEXTO: É terminantemente proibido criar seções explicativas das regras do prompt ou justificativas (ex: "ESCLARECIMENTO", "autonomia"). Vá direto ao ponto.
 
-5. ANÁLISE E RESOLUÇÃO DE INCIDENTES:
-- Para incidentes operacionais válidos, aplique metodologias estruturadas (Matriz SWOT/FOFA, Matriz de Risco, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil) para propor planos de ação práticos e mitigação de riscos de forma proativa.
+5. ANÁLISE E RESOLUÇÃO DE INCIDENTES (SITUAÇÕES OPERACIONAIS NARRADAS):
+- O agente deve classificar e responder o incidente com base em dois contextos operacionais bem definidos:
+  A) TIPO 1: SITUAÇÕES DE ALTA URGÊNCIA / RISCO IMEDIATO (Ex: congressista passando mal, briga física, risco elétrico ativo, apagão súbito na palestra em andamento):
+     - Prioridade: Agilidade extrema e foco na ação tática de campo.
+     - Regra: NÃO use matrizes complexas ou explicações metodológicas (SWOT, GUT, FMEA) para não sobrecarregar quem está lidando com a emergência.
+     - Limite: Resposta ultra-curta e direta, contendo no máximo 150 a 200 palavras, focada em passos físicos práticos e em quem acionar de imediato.
+  B) TIPO 2: PROBLEMAS OPERACIONAIS COMPLEXOS, DESAFIOS ESTRATÉGICOS OU PLANEJAMENTOS (Ex: gargalos crônicos na fila de credenciamento, conflito de agenda ou salas de amanhã, plano de contingência para chuva no dia seguinte, falhas logísticas recorrentes):
+     - Prioridade: Análise detalhada, profunda e estruturada.
+     - Regra: PROATIVAMENTE construa e utilize ferramentas metodológicas de mercado (como Matriz SWOT/FOFA, Matriz GUT de priorização, análise FMEA ou Planos de Contingência detalhados) para dar suporte estratégico rico, estruturado e completo à equipe de coordenação. O usuário não pedirá isso explicitamente, mas necessita dessa estrutura para organizar o caos.
+     - Limite: Sem limite rígido de palavras; preze por um plano detalhado, de alto nível, explicativo e robusto.
+- PROIBIÇÃO DE CONSELHOS ABSTRATOS (APLICÁVEL A TODOS OS CASOS): É terminantemente proibido fornecer conselhos clichês, óbvios ou conselhos vazios (como "mantenha a calma", "comunique-se bem", "garanta a segurança"). Toda orientação deve ser uma ação prática e específica (Ex: em vez de "garanta a segurança", use "isole a área imediatamente e afaste os congressistas do local").
+- INDIQUE QUEM ACIONAR: Identifique e liste no início os nomes e contatos reais de 1 ou 2 embaixadores encontrados na planilha pertinentes ao problema. Se não houver, indique de forma direta qual equipe/staff do local deve executar as ações.
 
 6. FORMATAÇÃO (TEXTO TOTALMENTE LIMPO - ZERO MARKDOWN):
 - TERMINANTEMENTE PROIBIDO usar formatação Markdown.
@@ -1133,6 +1146,8 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
               }
             });
 
+            replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+
             // Update stats
             stats.successCount++;
             stats.lastUsed = new Date().toISOString();
@@ -1162,6 +1177,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
                 timestamp: new Date().toISOString(),
                 deviceSessionId: deviceSessionId || "unknown",
                 userQuery: message,
+                agentResponse: replyText,
                 model: apiModel || "gemini-2.5-flash",
                 promptTokens: inT,
                 candidatesTokens: outT,
@@ -1172,7 +1188,6 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
               });
             }
 
-            replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
             success = true;
             saveGeminiKeyStats();
           } catch (err: any) {
@@ -1224,6 +1239,8 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
           }
         });
 
+        reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
+
         if (response.usageMetadata) {
           const inT = response.usageMetadata.promptTokenCount || 0;
           const outT = response.usageMetadata.candidatesTokenCount || 0;
@@ -1241,6 +1258,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
             timestamp: new Date().toISOString(),
             deviceSessionId: deviceSessionId || "unknown",
             userQuery: message,
+            agentResponse: reply,
             model: apiModel || "gemini-2.5-flash",
             promptTokens: inT,
             candidatesTokens: outT,
@@ -1250,8 +1268,6 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
             keyIndex: -1 // Custom single key
           });
         }
-
-        reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
       }
     } else {
       // Limpar e limitar o histórico de conversa para os últimos 4 turnos (2 perguntas e 2 respostas)
@@ -1329,6 +1345,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
           timestamp: new Date().toISOString(),
           deviceSessionId: deviceSessionId || "unknown",
           userQuery: message,
+          agentResponse: reply,
           model: finalModel,
           promptTokens: inT,
           candidatesTokens: outT,
