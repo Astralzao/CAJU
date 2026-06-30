@@ -1082,7 +1082,7 @@ export default function App() {
                           localStorage.setItem("destine_api_model", val);
                         }}
                         placeholder={
-                          apiProvider === "gemini" ? "Ex: gemini-3.5-flash ou gemini-2.5-pro" :
+                          apiProvider === "gemini" ? "Ex: gemini-2.5-flash ou gemini-2.5-pro" :
                           apiProvider === "groq" ? "Ex: llama-3.1-8b-instant ou mixtral-8x7b-32768" :
                           "Ex: gpt-4o-mini ou gpt-4o"
                         }
@@ -1093,7 +1093,7 @@ export default function App() {
                     <div className="flex items-start gap-2.5 text-[11px] text-zinc-400 leading-relaxed bg-[#120D23]/50 p-3 rounded-lg border border-[#241B3E]">
                       <span className="text-amber-400 font-bold shrink-0">💡 Nota:</span>
                       <div className="text-zinc-300">
-                        {apiProvider === "gemini" && "Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (process.env.GEMINI_API_KEY) rodando o modelo gemini-3.5-flash."}
+                        {apiProvider === "gemini" && "Se deixado em branco, o sistema tentará usar a chave padrão configurada na nuvem / variáveis de ambiente do servidor (process.env.GEMINI_API_KEY) rodando o modelo gemini-2.5-flash."}
                         {apiProvider === "groq" && "O sistema usará a variável de ambiente GROQ_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é llama-3.1-8b-instant, perfeito para responder rapidamente a grandes volumes de dados."}
                         {apiProvider === "openai" && "O sistema usará a variável de ambiente OPENAI_API_KEY se nenhuma chave personalizada for inserida aqui. O modelo padrão é gpt-4o-mini."}
                       </div>

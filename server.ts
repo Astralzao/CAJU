@@ -25,6 +25,7 @@ function getWritablePath(filename: string): string {
 
 const DB_PATH = getWritablePath("spreadsheets-db.json");
 const CONFIG_PATH = getWritablePath("config-db.json");
+const KEY_STATS_PATH = getWritablePath("gemini-key-stats.json");
 
 // Load Google Sheet configuration from file or env variables
 function readConfig() {
@@ -319,6 +320,29 @@ interface KeyStats {
 let geminiKeyPool: string[] = [];
 let geminiKeyStats: Record<number, KeyStats> = {};
 
+function loadGeminiKeyStats() {
+  try {
+    if (fs.existsSync(KEY_STATS_PATH)) {
+      const data = JSON.parse(fs.readFileSync(KEY_STATS_PATH, "utf8"));
+      // Validate that it's a valid object
+      if (data && typeof data === "object") {
+        geminiKeyStats = data;
+        console.log("📂 [STAT PERSISTENCE] Estatísticas carregadas com sucesso do disco.");
+      }
+    }
+  } catch (err) {
+    console.error("❌ Erro ao carregar estatísticas do pool de chaves do disco:", err);
+  }
+}
+
+function saveGeminiKeyStats() {
+  try {
+    fs.writeFileSync(KEY_STATS_PATH, JSON.stringify(geminiKeyStats, null, 2), "utf8");
+  } catch (err) {
+    console.error("❌ Erro ao salvar estatísticas do pool de chaves no disco:", err);
+  }
+}
+
 // Helper to initialize the pool
 function initGeminiKeyPool() {
   const pool: string[] = [];
@@ -351,13 +375,48 @@ function initGeminiKeyPool() {
   // Deduplicate
   geminiKeyPool = [...new Set(pool)];
 
-  // Initialize stats
+  // Load existing persistent stats
+  loadGeminiKeyStats();
+
+  const freshStats: Record<number, KeyStats> = {};
+  
+  // Re-map or create stats keeping past historic metrics
   geminiKeyPool.forEach((key, index) => {
-    if (!geminiKeyStats[index]) {
-      const masked = key.length > 10 
-        ? `${key.substring(0, 6)}...${key.substring(key.length - 4)}`
-        : "Chave curta";
-      geminiKeyStats[index] = {
+    const masked = key.length > 10 
+      ? `${key.substring(0, 6)}...${key.substring(key.length - 4)}`
+      : "Chave curta";
+      
+    // Try to find if we already have stats for this masked key at any index
+    let existing: KeyStats | undefined = undefined;
+    
+    // Search by masked key to preserve history even if environment reorders them
+    const matchedIndex = Object.keys(geminiKeyStats).find(
+      kIdx => geminiKeyStats[Number(kIdx)]?.maskedKey === masked
+    );
+    
+    if (matchedIndex !== undefined) {
+      existing = geminiKeyStats[Number(matchedIndex)];
+    } else if (geminiKeyStats[index]) {
+      // Fallback matching by index
+      existing = geminiKeyStats[index];
+    }
+
+    if (existing) {
+      freshStats[index] = {
+        keyIndex: index,
+        maskedKey: masked,
+        successCount: existing.successCount || 0,
+        errorCount: existing.errorCount || 0,
+        promptTokens: existing.promptTokens || 0,
+        candidatesTokens: existing.candidatesTokens || 0,
+        totalTokens: existing.totalTokens || 0,
+        lastUsed: existing.lastUsed || null,
+        status: existing.status === "active" ? "active" : existing.status, // preserve if rate_limited / invalid
+        statusReason: existing.statusReason,
+        cooldownUntil: existing.cooldownUntil
+      };
+    } else {
+      freshStats[index] = {
         keyIndex: index,
         maskedKey: masked,
         successCount: 0,
@@ -370,6 +429,9 @@ function initGeminiKeyPool() {
       };
     }
   });
+
+  geminiKeyStats = freshStats;
+  saveGeminiKeyStats();
 
   console.log(`🔑 Pool de Chaves Gemini carregado: ${geminiKeyPool.length} chaves configuradas.`);
 }
@@ -627,7 +689,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         }
       });
 
-      const useSmartFiltering = totalLinesInAllSheets > 1500;
+      const useSmartFiltering = totalLinesInAllSheets > 500;
 
       sheets.forEach((sheet: any) => {
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
@@ -676,20 +738,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                 searchTerms.some((term: string) => rowCellsText.includes(term));
                 
                 if (isMatch) {
-                  const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
-                  sheetsContextText += `    [Registro ${idx + 1}] ${rowCells.join(", ")}\n`;
+                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
                   includedCount++;
                   if (useSmartFiltering && !isCriticalTab && searchTerms.length > 0) matchedCount++;
                 }
               });
 
-              // Se usou filtragem e não encontrou nada na aba, mostra as 5 primeiras linhas como amostra geral
+              // Se usou filtragem e não encontrou nada na aba, mostra apenas as colunas (conforme pedido do usuário para economizar tokens)
               if (useSmartFiltering && includedCount === 0) {
-                sheetsContextText += `    (Nenhuma linha correspondeu diretamente aos termos de busca: [${searchTerms.join(", ")}]. Exibindo primeiras linhas de amostra geral:)\n`;
-                rows.slice(0, 5).forEach((row: any, idx: number) => {
-                  const rowCells = headers.map((h: string) => `${h}: ${row[h] !== undefined ? row[h] : ""}`);
-                  sheetsContextText += `    [Registro ${idx + 1}] ${rowCells.join(", ")}\n`;
-                });
+                sheetsContextText += `    (Nenhum registro correspondeu diretamente aos termos de busca: [${searchTerms.join(", ")}]. Filtrado para economizar tokens.)\n`;
               } else if (useSmartFiltering && matchedCount > 0) {
                 sheetsContextText += `    (Nota: Foram filtrados ${matchedCount} registros relevantes de um total de ${rows.length} desta aba para economizar limite de tokens)\n`;
               }
@@ -710,40 +768,33 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     }
 
     // 2. Build system instruction
-    const systemInstruction = `Você é um Consultor Estratégico e Assistente Especialista da operação/evento.
-Seu objetivo é auxiliar a equipe tanto na consulta precisa de dados operacionais (planilhas) quanto na análise estratégica, gerenciamento de riscos, e resolução de problemas utilizando metodologias consagradas de mercado.
+    const systemInstruction = `Você é um Consultor Estratégico e Assistente Especialista da operação/evento. Auxilie na consulta de planilhas e resolução de problemas usando metodologias de mercado.
 
-Suas diretrizes de comportamento e resposta:
+DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
 1. CONSULTA DE DADOS (PLANILHAS):
-   - Ao responder perguntas diretas sobre contatos, escalas, contingências ou escalas das planilhas, seja preciso, direto e conciso.
-   - Cite explicitamente a aba de origem (ex: "De acordo com a aba 'X': [resposta]"). Não invente dados de contato ou horários. Se uma informação pontual não existir nas tabelas, informe de forma honesta que o dado específico não consta nas bases atuais.
-   - REGRA DE CONTATOS DE EJs E CONSELHEIROS: Você só deve fornecer números de telefone, contatos de conselheiros, pós-juniores, canga ou detalhes específicos de EJs se a pergunta do usuário for especificamente voltada a conselheiros, a contatos de EJs, ou sobre como falar com uma EJ específica (exemplo: "como entrar em contato com a acont?"). Evite incluir esses contatos de EJs/conselheiros em dúvidas operacionais gerais ou de gestão de riscos de outras áreas, a menos que seja explicitamente solicitado ou diretamente relevante àquela EJ em foco. Quando a pergunta for sobre isso, responda de forma direta e completa com o conselheiro, número de telefone, pós-juniores, canga e demais informações correspondentes na planilha.
+- Seja preciso, direto e conciso. Cite explicitamente a aba de origem (ex: "De acordo com a aba 'X'"). Não invente dados de contato ou horários.
+- Forneça contatos de EJs, conselheiros, pós-juniores, canga ou similares APENAS se perguntado especificamente sobre eles. Não inclua esses contatos em dúvidas operacionais gerais.
 
-2. DIRETRIZ CRÍTICA DE RESOLUÇÃO (EMBAIXADORES E AUTONOMIA DO STAFF):
-   - Ao sugerir qualquer solução, plano de contingência, análise de riscos ou resposta a um incidente/problema, você deve OBRIGATORIAMENTE indicar no INÍCIO da resposta os nomes dos responsáveis/embaixadores relevantes encontrados na aba "EMBAIXADORES" ou contatos das planilhas.
-   - REGRA DE PALESTRANTES E MARCAS EXTERNAS: Quando a dúvida, situação ou problema envolver palestrantes, marcas, patrocinadores, fornecedores ou grupos externos (como Gentil, Grupo QRZ, ou qualquer outro palestrante/patrocinador listado ou citado), você deve procurar ativamente na planilha (especialmente nas abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e números de telefone dos membros da organização chamados carinhosamente de 'Remelas' (como os responsáveis por Conteúdo, Comercial, Parcerias, Marcas ou Comercial/Parcerias) ou contatos correspondentes a essa marca/palestra. Você deve OBRIGATORIAMENTE listar os nomes reais e telefones exatos desses responsáveis/embaixadores no cabeçalho inicial de contatos, em vez de usar descrições ou atribuições genéricas.
-   - ATENÇÃO: Trate a presença física do embaixador ou responsável como uma possibilidade. Em casos críticos/graves, a presença dele é certa. No entanto, em casos menos graves ou urgentes, o staff pode ter que resolver a situação de forma autônoma, seja recebendo apenas direcionamentos rápidos via rádio, ou até mesmo sem conseguir contato imediato.
-   - Portanto, NÃO condicione todo o plano de ação à presença física ou ação exclusiva do embaixador/responsável. O plano deve dar total autonomia técnica e prática ao usuário/staff na linha de frente para que consiga agir de imediato e de forma independente, utilizando as diretrizes e metodologias descritas na resposta.
-   - PROIBIÇÃO DE METATEXTOS E EXPLICAÇÕES DE REGRAS: Nunca crie seções, títulos ou parágrafos para justificar as regras do prompt ou a autonomia do staff (por exemplo, é TERMINANTEMENTE PROIBIDO gerar textos como "ESCLARECIMENTO SOBRE AUTONOMIA:", "Esta diretriz visa dar total autonomia...", ou introduções de bastidores). Vá direto aos contatos e depois diretamente para o plano prático.
-   - Se a situação não puder ser resolvida imediatamente de forma autônoma pelo usuário, adicione apenas uma frase curta e extremamente discreta junto ao cabeçalho ou no final (ex: "Se a situação não for resolvida imediatamente, entre em contato com os responsáveis acima.").
-   - Exemplo de cabeçalho inicial de contatos contendo dados reais encontrados na planilha (respeitando as regras de formatação sem markdown):
-     RESPONSÁVEIS DE EMBAIXADORES PARA ESTA SITUAÇÃO:
-     - [Nome real encontrado na planilha] ([Cargo/Atribuição/Segmento]): [Número de telefone real da planilha ou instrução]
-     - [Outro nome real, se houver] ([Cargo]): [Telefone/Contato]
+2. CONTATOS E ACIONAMENTO OPERACIONAL:
+- Indique no INÍCIO da resposta os responsáveis/embaixadores encontrados na planilha.
+- REGRA DE ACIONAMENTO: Selecione e liste no MÁXIMO 1 ou 2 embaixadores estritamente necessários e relevantes para a situação. Nunca liste múltiplos contatos redundantes ou desnecessários.
+- REGRA DE PALESTRANTES/MARCAS: Se o problema envolver palestrantes, patrocinadores, marcas ou fornecedores externos, procure ativamente nas planilhas (abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e telefones dos responsáveis diretos da organização (chamados 'Remelas') por Conteúdo, Comercial, Parcerias, Marcas e liste-os obrigatoriamente de forma nominal com telefone.
 
-3. AUTONOMIA ANALÍTICA E CONHECIMENTO GERAL (RESOLUÇÃO E RISCOS):
-   - Quando o usuário solicitar auxílio para resolver problemas, analisar riscos ou planejar ações que vão além dos dados exatos das planilhas, use ativamente seu conhecimento geral e metodologias profissionais reconhecidas (ex: Matriz SWOT/FOFA, Matriz de Risco/Probabilidade x Impacto, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil, PMBOK, etc.).
-   - Faça análises de riscos estruturadas, sugira planos de ação práticos, proponha estratégias de mitigação e forneça resoluções fundamentadas de forma proativa.
-   - Combine os dados das planilhas com as melhores práticas de mercado para dar respostas ricas e aplicáveis.
+3. AUTONOMIA TOTAL DO STAFF:
+- DIRETRIZ: Staff tem autonomia total. Resolva o problema localmente e de imediato de forma independente.
+- Não delegue nem condicione a ação do staff à presença física ou ação exclusiva do embaixador. Dê autonomia prática para agir no local usando metodologias adequadas.
+- Se a situação exigir escalonamento urgente, inclua no final: "Se a situação não for resolvida imediatamente, entre em contato com os responsáveis acima."
+- PROIBIÇÃO DE METATEXTO: É terminantemente proibido criar seções explicativas das regras do prompt ou justificativas (ex: "ESCLARECIMENTO", "autonomia"). Vá direto ao ponto.
 
-4. REGRAS CRÍTICAS DE FORMATAÇÃO (TEXTO LIMPO SEM CARACTERES ESPECIAIS DE MARKDOWN):
-   - Você está TERMINANTEMENTE PROIBIDO de usar caracteres especiais de formatação Markdown em suas respostas.
-   - NÃO use asteriscos duplos (**) ou simples (*) para fazer negritos ou itálicos.
-   - NÃO use hashtags ou símbolos cardinais (#, ##, ###, ####) para criar títulos. Use apenas letras maiúsculas para destacar títulos (exemplo: "PASSO 1: ISOLAMENTO E CONFORTO").
-   - NÃO use barras verticais (|) ou hífen/sinal de igual múltiplo (---, ===) para fazer tabelas ou divisores de página. Se precisar listar dados estruturados, use listas textuais simples com quebras de linha e hífens comuns.
-   - Use apenas hífens comuns (-) ou números normais para tópicos, e quebras de linha duplas para parágrafos.
-   - Mantenha a resposta limpa, profissional, legível e em formato de texto totalmente puro, sem marcas visuais do Markdown.
+4. ANÁLISE E RESOLUÇÃO:
+- Aplique metodologias estruturadas (Matriz SWOT/FOFA, Matriz de Risco, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil) para propor planos de ação práticos e mitigação de riscos de forma proativa.
+
+5. FORMATAÇÃO (TEXTO TOTALMENTE LIMPO - ZERO MARKDOWN):
+- TERMINANTEMENTE PROIBIDO usar formatação Markdown.
+- NÃO use asteriscos (* ou **) para negrito/itálico.
+- NÃO use hashtags (#, ##, ###) para títulos. Use apenas LETRAS MAIÚSCULAS para títulos de destaque (ex: "PASSO 1: ISOLAMENTO").
+- NÃO use barras verticais (|) ou múltiplos hífens/iguais (---, ===) para tabelas ou divisores. Use listas textuais simples, hífens comuns (-) ou números normais para tópicos, e quebras de linha duplas para parágrafos.
 `;
 
     // 3. Prepare Chat Prompt / Contents based on Provider
@@ -799,7 +850,7 @@ Suas diretrizes de comportamento e resposta:
             });
 
             const response = await ai.models.generateContent({
-              model: apiModel || "gemini-3.5-flash",
+              model: apiModel || "gemini-2.5-flash",
               contents: formattedContents,
               config: {
                 systemInstruction: systemInstruction,
@@ -832,6 +883,7 @@ Suas diretrizes de comportamento e resposta:
 
             replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
             success = true;
+            saveGeminiKeyStats();
           } catch (err: any) {
             console.error(`❌ [POOL] Falha na Chave #${keyIndex + 1} (${stats.maskedKey}):`, err.message || err);
             stats.errorCount++;
@@ -852,6 +904,7 @@ Suas diretrizes de comportamento e resposta:
             currentTry++;
             // Try next key
             keyIndex = getNextAvailableGeminiKeyIndex((keyIndex + 1) % geminiKeyPool.length);
+            saveGeminiKeyStats();
           }
         }
 
@@ -872,7 +925,7 @@ Suas diretrizes de comportamento e resposta:
         });
 
         const response = await ai.models.generateContent({
-          model: apiModel || "gemini-3.5-flash",
+          model: apiModel || "gemini-2.5-flash",
           contents: formattedContents,
           config: {
             systemInstruction: systemInstruction,
