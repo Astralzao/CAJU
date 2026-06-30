@@ -1080,117 +1080,104 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               } else if (searchTerms.length === 0 && !isCriticalTab) {
                 sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Pergunte sobre dados desta aba para visualizá-los.)\n`;
               } else {
-                // Se a aba for pequena (até 80 linhas), enviamos 100% dos dados para precisão matemática absoluta.
-                if (rows.length <= 80) {
+                // Encontrar correspondências diretas nesta aba primeiro
+                const matchedIndices: number[] = [];
+                rows.forEach((row: any, idx: number) => {
+                  const rowCellsText = headers.map((h: string) => {
+                    const val = row[h] !== undefined ? String(row[h]) : "";
+                    return normalizeText(val);
+                  }).join(" ");
+                  
+                  const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                    const normTerm = normalizeText(term);
+                    return rowCellsText.includes(normTerm);
+                  });
+
+                  if (hasDirectKeywordMatch) {
+                    matchedIndices.push(idx);
+                  }
+                });
+
+                const isSmallTargeted = isTabTargeted && rows.length <= 80;
+
+                if (isSmallTargeted) {
+                  // Se a aba for explicitamente mencionada/visada na pergunta e for pequena (até 80 linhas),
+                  // enviamos 100% dos dados para precisão analítica absoluta.
                   let matchedCount = 0;
                   rows.forEach((row: any, idx: number) => {
-                    const rowCellsText = headers.map((h: string) => {
-                      const val = row[h] !== undefined ? String(row[h]) : "";
-                      return normalizeText(val);
-                    }).join(" ");
-                    
-                    const hasDirectKeywordMatch = searchTerms.some((term: string) => {
-                      const normTerm = normalizeText(term);
-                      return rowCellsText.includes(normTerm);
-                    });
-
-                    const tag = hasDirectKeywordMatch ? "MATCH" : "CONTEXTO-GERAL";
+                    const hasMatch = matchedIndices.includes(idx);
+                    const tag = hasMatch ? "MATCH" : "CONTEXTO-GERAL";
                     const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
                     sheetsContextText += `    [${tag} ${idx + 1}] ${rowCells.join(" | ")}\n`;
                     includedCount++;
-                    if (hasDirectKeywordMatch) {
+                    if (hasMatch) {
                       matchedCount++;
                     }
                   });
 
                   if (matchedCount < includedCount && includedCount > 0) {
-                    sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas de forma COMPLETA para garantir a integridade de cálculos, somas, contagens ou cruzamentos de dados.)\n`;
+                    sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas por completo pois esta aba foi explicitamente visada.)\n`;
+                  }
+                } else if (matchedIndices.length > 0) {
+                  // Se houver correspondências de palavras-chave, enviamos um bloco contínuo contendo-as
+                  // mas limitamos rigorosamente o bloco contínuo para economizar tokens!
+                  const lastMatchIdx = Math.max(...matchedIndices);
+                  
+                  // Limites de bloco contínuo muito mais rígidos para evitar token explosion
+                  const maxContinuousLimit = isTabTargeted ? 40 : (isCriticalTab ? 15 : 5);
+                  const endIdx = Math.min(lastMatchIdx + 2, rows.length - 1, maxContinuousLimit - 1);
+
+                  let matchedCount = 0;
+                  for (let i = 0; i <= endIdx; i++) {
+                    const row = rows[i];
+                    const hasMatch = matchedIndices.includes(i);
+                    const tag = hasMatch ? "MATCH" : "CONTEXTO-GERAL";
+                    const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                    sheetsContextText += `    [${tag} ${i + 1}] ${rowCells.join(" | ")}\n`;
+                    includedCount++;
+                    if (hasMatch) {
+                      matchedCount++;
+                    }
+                  }
+
+                  // Se houver registros correspondentes adicionais além do bloco contínuo limpo, incluímos apenas os MATCHES de forma pontual e isolada
+                  if (lastMatchIdx > endIdx) {
+                    sheetsContextText += `    ... (intervalo de segurança omitido para poupar tokens) ...\n`;
+                    matchedIndices.forEach((idx) => {
+                      if (idx > endIdx) {
+                        const row = rows[idx];
+                        const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                        sheetsContextText += `    [MATCH ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                        includedCount++;
+                      }
+                    });
+                  }
+
+                  if (matchedCount < includedCount) {
+                    sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas para contextualizar a sequência e continuidade local dos dados da aba "${tab.name}". Use apenas linhas [MATCH] para respostas diretas a pessoas/situações específicas.)\n`;
                   }
                 } else {
-                  // Para tabelas maiores, usamos Bloco de Continuidade Dinâmica com busca inteligente
-                  const matchedIndices: number[] = [];
-                  rows.forEach((row: any, idx: number) => {
-                    const rowCellsText = headers.map((h: string) => {
-                      const val = row[h] !== undefined ? String(row[h]) : "";
-                      return normalizeText(val);
-                    }).join(" ");
-                    
-                    const hasDirectKeywordMatch = searchTerms.some((term: string) => {
-                      const normTerm = normalizeText(term);
-                      return rowCellsText.includes(normTerm);
-                    });
-
-                    if (hasDirectKeywordMatch) {
-                      matchedIndices.push(idx);
-                    }
-                  });
-
-                  if (matchedIndices.length > 0) {
-                    // Encontramos correspondências! Para manter a integridade tática de listas sequenciais (como transfers consecutivos ou escala de horários),
-                    // enviamos um bloco CONTÍNUO de linhas desde o início (Reg 1) até o último registro correspondente encontrado (+ margem de segurança de 5 linhas).
-                    const lastMatchIdx = Math.max(...matchedIndices);
-                    
-                    // Limite dinâmico: abas visadas/citadas toleram blocos contínuos maiores para permitir análises globais.
-                    const maxContinuousLimit = isTabTargeted ? 300 : (isCriticalTab ? 150 : 50);
-                    const endIdx = Math.min(lastMatchIdx + 5, rows.length - 1, maxContinuousLimit);
-
-                    let matchedCount = 0;
-                    for (let i = 0; i <= endIdx; i++) {
-                      const row = rows[i];
-                      const rowCellsText = headers.map((h: string) => {
-                        const val = row[h] !== undefined ? String(row[h]) : "";
-                        return normalizeText(val);
-                      }).join(" ");
-                      
-                      const hasDirectKeywordMatch = searchTerms.some((term: string) => {
-                        const normTerm = normalizeText(term);
-                        return rowCellsText.includes(normTerm);
-                      });
-
-                      const tag = hasDirectKeywordMatch ? "MATCH" : "CONTEXTO-GERAL";
-                      const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
-                      sheetsContextText += `    [${tag} ${i + 1}] ${rowCells.join(" | ")}\n`;
-                      includedCount++;
-                      if (hasDirectKeywordMatch) {
-                        matchedCount++;
-                      }
-                    }
-
-                    // Se houver registros correspondentes adicionais além do bloco contínuo, incluímos eles pontualmente
-                    if (lastMatchIdx > endIdx) {
-                      sheetsContextText += `    ... (intervalo de segurança omitido para poupar tokens) ...\n`;
-                      matchedIndices.forEach((idx) => {
-                        if (idx > endIdx) {
-                          const row = rows[idx];
-                          const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
-                          sheetsContextText += `    [MATCH ${idx + 1}] ${rowCells.join(" | ")}\n`;
-                          includedCount++;
-                        }
-                      });
-                    }
-
-                    if (matchedCount < includedCount) {
-                      sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas para contextualizar a sequência e continuidade dos dados da aba "${tab.name}". Use apenas linhas [MATCH] para respostas diretas a pessoas/situações específicas.)\n`;
-                    }
-                  } else {
-                    // Sem correspondência direta:
-                    // Se a aba for visada ou crítica, mostramos um bloco contínuo inicial generoso para que a IA possa entender o contexto.
-                    // Se for secundária, mostramos apenas as 3 primeiras linhas como preview estrutural.
-                    const fallbackCount = isTabTargeted ? 50 : (isCriticalTab ? 20 : 3);
+                  // Sem correspondência direta de termos na aba:
+                  // Se for visada, mostramos uma pequena amostra (10 linhas).
+                  // Se for crítica, mostramos uma amostra ainda menor (3 linhas).
+                  // Se for secundária, NÃO enviamos nenhuma linha (0 linhas) para máxima economia de tokens!
+                  const fallbackCount = isTabTargeted ? 10 : (isCriticalTab ? 3 : 0);
+                  if (fallbackCount > 0) {
                     const endIdx = Math.min(fallbackCount - 1, rows.length - 1);
-                    
                     for (let i = 0; i <= endIdx; i++) {
                       const row = rows[i];
                       const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
                       sheetsContextText += `    [CONTEXTO-GERAL ${i + 1}] ${rowCells.join(" | ")}\n`;
                       includedCount++;
                     }
-                    sheetsContextText += `    (ATENÇÃO: nenhuma linha desta aba correspondeu diretamente à pergunta. As linhas [CONTEXTO-GERAL] acima servem apenas como amostra estrutural.)\n`;
+                    sheetsContextText += `    (ATENÇÃO: nenhuma linha desta aba correspondeu diretamente à pergunta. As linhas [CONTEXTO-GERAL] acima servem apenas como amostra estrutural de ${tab.name}.)\n`;
+                  } else {
+                    sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca. Linhas omitidas para economizar tokens. Pergunte especificamente sobre dados desta aba para visualizá-los.)\n`;
                   }
+                }
 
-                  if (rows.length > includedCount) {
-                    sheetsContextText += `    (Nota: Otimizado enviando ${includedCount} de ${rows.length} registros para preservar o limite de tokens)\n`;
-                  }
+                if (rows.length > includedCount && includedCount > 0) {
+                  sheetsContextText += `    (Nota: Otimizado enviando ${includedCount} de ${rows.length} registros para preservar o limite de tokens)\n`;
                 }
               }
             } else {
