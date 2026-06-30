@@ -936,7 +936,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         }
       });
 
-      const useSmartFiltering = totalLinesInAllSheets > 500;
+      const useSmartFiltering = true;
 
       sheets.forEach((sheet: any) => {
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
@@ -974,29 +974,41 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                     tabNameLower.includes("diretoria") ||
                                     tabNameLower.includes("hino");
 
-              rows.forEach((row: any, idx: number) => {
-                const rowCellsText = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`).join(" ").toLowerCase();
-                
-                // Se for aba crítica de contatos/embaixadores/palestrantes, incluímos sempre.
-                // Caso contrário, verificamos correspondência com algum termo de busca.
-                const isMatch = !useSmartFiltering || 
-                                isCriticalTab || 
-                                searchTerms.length === 0 || 
-                                searchTerms.some((term: string) => rowCellsText.includes(term));
-                
-                if (isMatch) {
-                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
-                  sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
-                  includedCount++;
-                  if (useSmartFiltering && !isCriticalTab && searchTerms.length > 0) matchedCount++;
-                }
-              });
+              // Se não houver termos de busca, ocultamos todas as linhas para poupar 100% de tokens em interações genéricas
+              if (searchTerms.length === 0) {
+                sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Se precisar de dados desta aba, pergunte especificamente por ela ou por palavras contidas nela.)\n`;
+              } else {
+                rows.forEach((row: any, idx: number) => {
+                  // Limite rígido de 30 registros por aba para evitar token explosion
+                  if (includedCount >= 30) {
+                    return;
+                  }
 
-              // Se usou filtragem e não encontrou nada na aba, mostra apenas as colunas (conforme pedido do usuário para economizar tokens)
-              if (useSmartFiltering && includedCount === 0) {
-                sheetsContextText += `    (Nenhum registro correspondeu diretamente aos termos de busca: [${searchTerms.join(", ")}]. Filtrado para economizar tokens.)\n`;
-              } else if (useSmartFiltering && matchedCount > 0) {
-                sheetsContextText += `    (Nota: Foram filtrados ${matchedCount} registros relevantes de um total de ${rows.length} desta aba para economizar limite de tokens)\n`;
+                  const rowCellsText = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`).join(" ").toLowerCase();
+                  
+                  // Um registro é correspondente se contém algum termo de busca diretamente
+                  const hasDirectKeywordMatch = searchTerms.some((term: string) => rowCellsText.includes(term));
+                  
+                  // Em abas críticas (como contatos), podemos incluir as primeiras 15 linhas como contexto fallback de segurança
+                  const isBasicContextFallback = isCriticalTab && includedCount < 15;
+
+                  const isMatch = hasDirectKeywordMatch || isBasicContextFallback;
+                  
+                  if (isMatch) {
+                    const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                    sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                    includedCount++;
+                    if (hasDirectKeywordMatch) {
+                      matchedCount++;
+                    }
+                  }
+                });
+
+                if (includedCount === 0) {
+                  sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca: [${searchTerms.join(", ")}]. Filtrado para economizar tokens.)\n`;
+                } else if (rows.length > includedCount) {
+                  sheetsContextText += `    (Nota: Mostrando ${includedCount} registros relevantes de um total de ${rows.length} desta aba para economizar limite de tokens)\n`;
+                }
               }
             } else {
               sheetsContextText += `  (Esta aba está vazia)\n`;
@@ -1021,17 +1033,19 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
 1. CONSULTA DE DADOS (PLANILHAS):
 - Seja preciso, direto e conciso. Cite explicitamente a aba de origem (ex: "De acordo com a aba 'X'"). Não invente dados de contato ou horários.
+- REGRA CRÍTICA DE CONTEXTO E HISTÓRICO: Use SOMENTE o resultado de busca fornecido nas planilhas do contexto atual da pergunta mais recente. Ignore completamente quaisquer dados, contatos, horários ou alocações mencionados em perguntas ou respostas anteriores do histórico de conversas, a menos que a pergunta atual faça uma referência direta a eles.
+- PROIBIÇÃO ABSOLUTA DE ALUCINAÇÃO (NÃO INVENTAR): Se não houver correspondência clara ou se a informação não constar explicitamente na busca atual, responda estritamente "não encontrei" ou informe de maneira direta que os dados não estão disponíveis nas planilhas, em vez de inventar nomes, números, telefones, horários ou planos.
 - Forneça contatos de EJs, conselheiros, pós-juniores, canga ou similares APENAS se perguntado especificamente sobre eles. Não inclua esses contatos em dúvidas operacionais gerais.
 
 2. TRATAMENTO DE PERGUNTAS FORA DE CONTEXTO OU DADOS INEXISTENTES:
-- Se o usuário fizer uma pergunta sobre fatos específicos, horários, atribuições de tarefas ou alocações individuais de pessoas ou organizações que NÃO constam em nenhuma planilha da base de dados (Exemplos: "o que fulano de tal vai fazer no primeiro dia?", "qual a minha alocação?", "qual a alocação de fulano de tal?"), NÃO formule planos de ação, NÃO liste embaixadores e NÃO invente dados. Responda de forma extremamente simples, direta e curta, informando apenas que não há registros ou dados sobre isso na planilha atual.
+- Se o usuário fizer uma pergunta sobre fatos específicos, horários, atribuições de tarefas ou alocações individuais de pessoas ou organizações que NÃO constam em nenhuma planilha da base de dados (Exemplos: "o que fulano de tal vai fazer no primeiro dia?", "qual a minha alocação?", "qual a alocação de fulano de tal?"), NÃO formule planos de ação, NÃO liste embaixadores e NÃO invente dados. Responda de forma extremamente simples, direta e curta, informando apenas que não há registros ou dados sobre isso na planilha atual (usando preferencialmente "não encontrei" se for busca direta).
 - EXCEÇÃO PARA SITUAÇÕES NARRADAS / INCIDENTES OPERACIONAIS: Se o usuário narrar uma situação real ou problema simulado ocorrido no evento (Exemplos: "um congressista está passando mal", "falta de energia na sala de palestra", "atraso de palestrante"), aplique bom senso e elabore um plano de ação prático usando metodologias de contingência. No entanto, inclua nos contatos de acionamento APENAS contatos que sejam estritamente pertinentes àquele problema específico (ex: não liste contatos de comercial ou marcas se a situação for médica).
 - BOM SENSO NO ESCOPO: Use discernimento inteligente e bom senso. Separe de forma muito clara o que é pertinente à dúvida do usuário do que não é. Se a dúvida não tem relação direta com dados da planilha ou com incidentes operacionais a serem resolvidos, diga apenas que não encontrou informações.
 
 3. CONTATOS E ACIONAMENTO OPERACIONAL:
 - Indique no INÍCIO da resposta os responsáveis/embaixadores encontrados na planilha pertinentes à situação.
 - REGRA DE ACIONAMENTO: Selecione e liste no MÁXIMO 1 ou 2 embaixadores estritamente necessários e relevantes para a situação. Nunca liste múltiplos contatos redundantes ou desnecessários.
-- REGRA DE PALESTRANTES/MARCAS: Se o problema envolver palestrantes, patrocinadores, marcas ou fornecedores externos, procure ativamente nas planilhas (abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e telefones dos responsáveis diretos da organização (chamados 'Remelas') por Conteúdo, Comercial, Parcerias, Marcas e liste-os obrigatoriamente de forma nominal com telefone.
+- REGRA DE PALESTRANTES/MARCAS: Se o problem envolver palestrantes, patrocinadores, marcas ou fornecedores externos, procure ativamente nas planilhas (abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e telefones dos responsáveis diretos da organização (chamados 'Remelas') por Conteúdo, Comercial, Parcerias, Marcas e liste-os obrigatoriamente de forma nominal com telefone.
 
 4. AUTONOMIA TOTAL DO STAFF:
 - DIRETRIZ: Staff tem autonomia total. Resolva o problema localmente e de imediato de forma independente.
@@ -1053,13 +1067,22 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
     let reply = "";
 
     if (apiProvider === "gemini") {
-      // Format history and prompt for Gemini
+      // Limpar e limitar o histórico de conversa para os últimos 4 turnos (2 perguntas e 2 respostas)
+      // para evitar o acúmulo de dados antigos de busca e reduzir drasticamente os tokens gastos.
       const formattedContents: any[] = [];
+      const maxHistoryMessages = 4;
+      
       if (history && Array.isArray(history)) {
-        history.forEach((msg: any) => {
+        const lastMessages = history.slice(-maxHistoryMessages);
+        lastMessages.forEach((msg: any) => {
+          let content = msg.content || "";
+          // Truncar mensagens muito longas do assistente para não acumular tokens no histórico
+          if (msg.role === "assistant" && content.length > 800) {
+            content = content.substring(0, 800) + "... (Texto longo do histórico truncado para economizar tokens)";
+          }
           formattedContents.push({
             role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text: msg.content }]
+            parts: [{ text: content }]
           });
         });
       }
@@ -1231,16 +1254,24 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
         reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
       }
     } else {
-      // Format messages for OpenAI / Groq (OpenAI-compatible)
+      // Limpar e limitar o histórico de conversa para os últimos 4 turnos (2 perguntas e 2 respostas)
+      // para evitar o acúmulo de dados antigos de busca e reduzir drasticamente os tokens gastos.
       const messagesArray: any[] = [
         { role: "system", content: systemInstruction }
       ];
 
+      const maxHistoryMessages = 4;
       if (history && Array.isArray(history)) {
-        history.forEach((msg: any) => {
+        const lastMessages = history.slice(-maxHistoryMessages);
+        lastMessages.forEach((msg: any) => {
+          let content = msg.content || "";
+          // Truncar mensagens muito longas do assistente para não acumular tokens no histórico
+          if (msg.role === "assistant" && content.length > 800) {
+            content = content.substring(0, 800) + "... (Texto longo do histórico truncado para economizar tokens)";
+          }
           messagesArray.push({
             role: msg.role === "assistant" ? "assistant" : "user",
-            content: msg.content
+            content: content
           });
         });
       }
