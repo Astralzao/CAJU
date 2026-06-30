@@ -910,10 +910,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       }
     }
 
-    const searchTerms = combinedTextForSearch
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ")
-      .split(/\s+/)
-      .filter((term: string) => term.length > 2 && !["dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", "nas", "aos", "aas"].includes(term));
+    const STOP_WORDS = new Set([
+      "dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", 
+      "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", 
+      "nas", "aos", "aas", "quantas", "quantos", "quanta", "quanto", "pessoas", "pessoa", "vem", "vão", 
+      "vai", "primeiro", "primeira", "ultimo", "ultima", "mais", "menos", "estao", "isso", "aquilo", 
+      "esteve", "estava", "horas", "hora", "minuto", "minutos", "dia", "dias", "mes", "ano", "evento", 
+      "planilha", "aba", "registro", "linhas", "linha", "dados", "tabela", "informacao", "informacoes",
+      "um", "uma", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "tem", "têm",
+      "em", "no", "na", "de", "do", "da", "ao", "as", "os", "sao", "foi", "foram", "seria", "seriam"
+    ]);
 
     const normalizeText = (text: string) => {
       return text
@@ -922,24 +928,30 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         .toLowerCase();
     };
 
+    const searchTerms = combinedTextForSearch
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // remove accents
+      .replace(/[^a-zA-Z0-9\s:]/g, " ") // keep letters, numbers, and colons
+      .toLowerCase()
+      .split(/\s+/)
+      .map(term => term.trim())
+      .filter((term: string) => {
+        if (STOP_WORDS.has(term)) return false;
+        
+        // Keep numeric/time-like terms of length >= 2 (e.g., "12", "12h", "12:00")
+        const isNumericOrTime = /^[0-9]+[a-z0-9:]*$/.test(term) || /^[a-z]+[0-9]+$/.test(term);
+        if (isNumericOrTime) {
+          return term.length >= 2;
+        }
+        
+        // General words must be length > 2
+        return term.length > 2;
+      });
+
     // 2. Format Sheet Data for the prompt context with smart filtering (RAG)
     let sheetsContextText = "";
     if (sheets && Array.isArray(sheets) && sheets.length > 0) {
       sheetsContextText = "--- DADOS DAS PLANILHAS ALIMENTADAS (Filtrados por relevância para economizar limite de tokens) ---\n\n";
-      
-      // Calcular total de linhas para decidir se precisa de filtragem agressiva
-      let totalLinesInAllSheets = 0;
-      sheets.forEach((sheet: any) => {
-        if (sheet.tabs && Array.isArray(sheet.tabs)) {
-          sheet.tabs.forEach((tab: any) => {
-            if (tab.rows && Array.isArray(tab.rows)) {
-              totalLinesInAllSheets += tab.rows.length;
-            }
-          });
-        }
-      });
-
-      const useSmartFiltering = true;
 
       sheets.forEach((sheet: any) => {
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
@@ -964,7 +976,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               const normalizedTabName = normalizeText(tab.name || "");
               const isTabTargeted = searchTerms.some((term: string) => {
                 const normTerm = normalizeText(term);
-                return normTerm.length > 3 && (normalizedTabName.includes(normTerm) || normTerm.includes(normalizedTabName));
+                return normTerm.length > 2 && (normalizedTabName.includes(normTerm) || normTerm.includes(normalizedTabName));
               });
 
               const isCriticalTab = isTabTargeted ||
@@ -975,25 +987,43 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                     tabNameLower.includes("patrocinador") ||
                                     tabNameLower.includes("remela") ||
                                     tabNameLower.includes("diretoria") ||
-                                    tabNameLower.includes("hino");
+                                    tabNameLower.includes("hino") ||
+                                    tabNameLower.includes("transfer") ||
+                                    tabNameLower.includes("transporte") ||
+                                    tabNameLower.includes("escala") ||
+                                    tabNameLower.includes("quarto") ||
+                                    tabNameLower.includes("hospedagem");
 
-              // Se não houver termos de busca, ocultamos todas as linhas para poupar 100% de tokens em interações genéricas
-              if (searchTerms.length === 0) {
-                sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Se precisar de dados desta aba, pergunte especificamente por ela ou por palavras contidas nela.)\n`;
+              // Se o usuário não incluiu termos de busca e a aba não for visada/crítica, envia apenas cabeçalho curto para economizar tokens
+              if (searchTerms.length === 0 && !isCriticalTab) {
+                sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Pergunte sobre dados desta aba para visualizá-los.)\n`;
               } else {
+                // Definindo limites dinâmicos e generosos dependendo da importância da aba
+                // Se a aba for explicitamente visada (isTabTargeted), enviamos um bloco contínuo de até 150 linhas
+                // para permitir cálculos, somas e agrupamentos completos com precisão matemática impecável.
+                // Se for apenas crítica, enviamos até 45 linhas contínuas.
+                // Outras abas genéricas recebem até 12 linhas contínuas de segurança.
+                const fallbackCount = isTabTargeted ? 150 : (isCriticalTab ? 45 : 12);
+                const maxRowsToInclude = isTabTargeted ? 200 : (isCriticalTab ? 75 : 25);
+
                 rows.forEach((row: any, idx: number) => {
-                  // Limite rígido de 30 registros por aba para evitar token explosion
-                  if (includedCount >= 30) {
+                  if (includedCount >= maxRowsToInclude) {
                     return;
                   }
 
-                  const rowCellsText = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`).join(" ").toLowerCase();
+                  const rowCellsText = headers.map((h: string) => {
+                    const val = row[h] !== undefined ? String(row[h]) : "";
+                    return normalizeText(val);
+                  }).join(" ");
                   
                   // Um registro é correspondente se contém algum termo de busca diretamente
-                  const hasDirectKeywordMatch = searchTerms.some((term: string) => rowCellsText.includes(term));
+                  const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                    const normTerm = normalizeText(term);
+                    return rowCellsText.includes(normTerm);
+                  });
                   
-                  // Em abas críticas (como contatos), podemos incluir as primeiras 15 linhas como contexto fallback de segurança
-                  const isBasicContextFallback = isCriticalTab && includedCount < 15;
+                  // Fallback sequencial para garantir continuidade e bloco íntegro de dados
+                  const isBasicContextFallback = idx < fallbackCount;
 
                   const isMatch = hasDirectKeywordMatch || isBasicContextFallback;
                   
@@ -1010,7 +1040,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                 if (includedCount === 0) {
                   sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca: [${searchTerms.join(", ")}]. Filtrado para economizar tokens.)\n`;
                 } else if (rows.length > includedCount) {
-                  sheetsContextText += `    (Nota: Mostrando ${includedCount} registros relevantes de um total de ${rows.length} desta aba para economizar limite de tokens)\n`;
+                  sheetsContextText += `    (Nota: Mostrando ${includedCount} registros de relevância de um total de ${rows.length} desta aba para otimizar o contexto)\n`;
                 }
               }
             } else {

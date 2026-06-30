@@ -30,32 +30,86 @@ export default function ChatInterface({
 
   // Suggested Prompts based on available spreadsheets
   const getSuggestions = () => {
+    if (!spreadsheets || spreadsheets.length === 0) {
+      return [
+        "Quais planilhas estão disponíveis e como posso carregá-las?",
+        "Como configurar e sincronizar uma planilha do Google Sheets?",
+        "Quais são as diretrizes de resposta para incidentes operacionais?"
+      ];
+    }
+
     const suggestions: string[] = [];
+
+    // Loop through spreadsheets and tabs to find relevant headers and rows
+    for (const sheet of spreadsheets) {
+      for (const tab of sheet.tabs) {
+        if (tab.rows && tab.rows.length > 0) {
+          const headers = tab.headers.map(h => h.toLowerCase().trim());
+          
+          // 1. Look for Contact info
+          const nameIdx = headers.findIndex(h => h.includes("nome") || h.includes("conselheiro") || h.includes("embaixador") || h.includes("ej") || h.includes("empresa"));
+          const contactIdx = headers.findIndex(h => h.includes("contato") || h.includes("telefone") || h.includes("email") || h.includes("whatsapp") || h.includes("celular"));
+          
+          if (nameIdx !== -1 && tab.rows[0]) {
+            const row = tab.rows[0];
+            const nameCol = tab.headers[nameIdx];
+            const nameValue = String(row[nameCol] || "").trim();
+            
+            if (nameValue && nameValue.length < 50) {
+              if (contactIdx !== -1) {
+                suggestions.push(`Qual o contato do ${nameValue} (${sheet.name})?`);
+              } else {
+                suggestions.push(`Quais são os dados cadastrados para ${nameValue}?`);
+              }
+            }
+          }
+
+          // 2. Look for Procedures/Incidents
+          const probIdx = headers.findIndex(h => h.includes("situa") || h.includes("problema") || h.includes("incidente") || h.includes("emerg") || h.includes("caso") || h.includes("ocorr"));
+          if (probIdx !== -1 && tab.rows[0]) {
+            const row = tab.rows[0];
+            const probCol = tab.headers[probIdx];
+            const probValue = String(row[probCol] || "").trim();
+            if (probValue && probValue.length > 3 && probValue.length < 80) {
+              suggestions.push(`O que fazer em caso de: "${probValue}"?`);
+            }
+          }
+          
+          // 3. Look for Location/Role info
+          const locIdx = headers.findIndex(h => h.includes("local") || h.includes("sala") || h.includes("pavilhao") || h.includes("setor"));
+          if (locIdx !== -1 && tab.rows[0]) {
+            const row = tab.rows[0];
+            const locCol = tab.headers[locIdx];
+            const locValue = String(row[locCol] || "").trim();
+            if (locValue && locValue.length < 55) {
+              suggestions.push(`Quais atividades ou contatos estão alocados no setor/local ${locValue}?`);
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Fallback based on Sheet names
+    if (suggestions.length < 3) {
+      for (const sheet of spreadsheets) {
+        suggestions.push(`Quais informações estão registradas na planilha "${sheet.name}"?`);
+        if (sheet.tabs.length > 0) {
+          suggestions.push(`Faça um resumo dos dados encontrados na aba "${sheet.tabs[0].name}" de "${sheet.name}".`);
+        }
+      }
+    }
+
+    // Remove duplicates and slice to 3
+    const uniqueSuggestions = Array.from(new Set(suggestions)).filter(Boolean);
     
-    const hasConselheiros = spreadsheets.some((s) => s.id === "sheet-conselheiros" || s.name.toLowerCase().includes("conselheiro"));
-    const hasEmergencia = spreadsheets.some((s) => s.id === "sheet-manual-emergencia" || s.name.toLowerCase().includes("emergencia") || s.name.toLowerCase().includes("manual"));
-    const hasFornecedores = spreadsheets.some((s) => s.id === "sheet-contingencia-fornecedores" || s.name.toLowerCase().includes("fornecedor") || s.name.toLowerCase().includes("contingencia"));
-
-    if (hasConselheiros) {
-      suggestions.push("Quem é o conselheiro da Adm Consult e qual o contato dele?");
-      suggestions.push("Quais os dados de contato do conselheiro da Tech Jr?");
-    }
-    if (hasEmergencia) {
-      suggestions.push("O que fazer se um congressista estiver passando mal?");
-      suggestions.push("Onde tirar segunda via do crachá perdido e qual o valor?");
-    }
-    if (hasFornecedores) {
-      suggestions.push("O que fazer se o fornecedor de som não entregar o combinado?");
-      suggestions.push("Quem é o fornecedor reserva para buffet de coffee break?");
+    // Final fallback to guarantee 3 items
+    if (uniqueSuggestions.length < 3) {
+      uniqueSuggestions.push("Faça um resumo geral de quem trabalha em cada setor.");
+      uniqueSuggestions.push("Como entrar em contato com os embaixadores do evento?");
+      uniqueSuggestions.push("Quais são as colunas de dados registradas nas planilhas ativas?");
     }
 
-    // Default catch-all questions
-    if (suggestions.length === 0) {
-      suggestions.push("Quais informações estão registradas nas planilhas alimentadas?");
-      suggestions.push("Faça um resumo geral de quem trabalha em cada setor.");
-    }
-
-    return suggestions.slice(0, 3); // Return top 3
+    return uniqueSuggestions.slice(0, 3);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
