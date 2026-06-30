@@ -894,6 +894,27 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     const userMessageLower = message.toLowerCase();
     let combinedTextForSearch = userMessageLower;
 
+    const normalizeText = (text: string) => {
+      return text
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    };
+
+    // Identificar nomes de abas presentes na mensagem atual
+    const allTabNames: string[] = [];
+    if (sheets && Array.isArray(sheets)) {
+      sheets.forEach((sheet: any) => {
+        if (sheet.tabs && Array.isArray(sheet.tabs)) {
+          sheet.tabs.forEach((tab: any) => {
+            if (tab.name) {
+              allTabNames.push(normalizeText(tab.name));
+            }
+          });
+        }
+      });
+    }
+
     // Inteligência de contexto para perguntas continuadas (ex: "E da Adm Consult?")
     if (history && Array.isArray(history)) {
       const userMessages = history
@@ -906,12 +927,45 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       ) || words.length < 5;
 
       if (isContinuation && userMessages.length > 0) {
-        const lastUserMsg = userMessages[userMessages.length - 1];
+        let lastUserMsg = userMessages[userMessages.length - 1];
+        
+        // Se a mensagem atual cita abas específicas, removemos do histórico do usuário referências a OUTRAS abas para não misturar contextos de entidades distintas
+        const tabsInCurrent = allTabNames.filter(tabName => 
+          tabName.length > 2 && normalizeText(userMessageLower).includes(tabName)
+        );
+        
+        if (tabsInCurrent.length > 0) {
+          allTabNames.forEach(tabName => {
+            if (!tabsInCurrent.includes(tabName)) {
+              const parts = tabName.split(/\s+/);
+              parts.forEach(part => {
+                if (part.length > 2) {
+                  const regex = new RegExp(`\\b${part}\\w*\\b`, 'gi');
+                  lastUserMsg = lastUserMsg.replace(regex, "");
+                }
+              });
+            }
+          });
+        }
+
         combinedTextForSearch = `${userMessageLower} ${lastUserMsg}`;
         
         // Se for curtíssima (ex: "E da Adm?"), puxa também a penúltima
         if (words.length <= 3 && userMessages.length > 1) {
-          const secondLastUserMsg = userMessages[userMessages.length - 2];
+          let secondLastUserMsg = userMessages[userMessages.length - 2];
+          if (tabsInCurrent.length > 0) {
+            allTabNames.forEach(tabName => {
+              if (!tabsInCurrent.includes(tabName)) {
+                const parts = tabName.split(/\s+/);
+                parts.forEach(part => {
+                  if (part.length > 2) {
+                    const regex = new RegExp(`\\b${part}\\w*\\b`, 'gi');
+                    secondLastUserMsg = secondLastUserMsg.replace(regex, "");
+                  }
+                });
+              }
+            });
+          }
           combinedTextForSearch = `${combinedTextForSearch} ${secondLastUserMsg}`;
         }
       }
@@ -927,13 +981,6 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       "um", "uma", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "tem", "têm",
       "em", "no", "na", "de", "do", "da", "ao", "as", "os", "sao", "foi", "foram", "seria", "seriam"
     ]);
-
-    const normalizeText = (text: string) => {
-      return text
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase();
-    };
 
     const searchTerms = combinedTextForSearch
       .normalize("NFD")
@@ -1004,57 +1051,117 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               if (searchTerms.length === 0 && !isCriticalTab) {
                 sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Pergunte sobre dados desta aba para visualizá-los.)\n`;
               } else {
-                // 1. Primeira passada: Varre a aba INTEIRA em busca de correspondências diretas dos termos de busca
-                const matchedRows: { row: any; idx: number }[] = [];
-                rows.forEach((row: any, idx: number) => {
-                  const rowCellsText = headers.map((h: string) => {
-                    const val = row[h] !== undefined ? String(row[h]) : "";
-                    return normalizeText(val);
-                  }).join(" ");
-                  
-                  // Um registro é correspondente se contém algum termo de busca diretamente
-                  const hasDirectKeywordMatch = searchTerms.some((term: string) => {
-                    const normTerm = normalizeText(term);
-                    return rowCellsText.includes(normTerm);
+                // Se a aba for pequena (até 80 linhas), enviamos 100% dos dados para precisão matemática absoluta.
+                if (rows.length <= 80) {
+                  let matchedCount = 0;
+                  rows.forEach((row: any, idx: number) => {
+                    const rowCellsText = headers.map((h: string) => {
+                      const val = row[h] !== undefined ? String(row[h]) : "";
+                      return normalizeText(val);
+                    }).join(" ");
+                    
+                    const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                      const normTerm = normalizeText(term);
+                      return rowCellsText.includes(normTerm);
+                    });
+
+                    const tag = hasDirectKeywordMatch ? "MATCH" : "CONTEXTO-GERAL";
+                    const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                    sheetsContextText += `    [${tag} ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                    includedCount++;
+                    if (hasDirectKeywordMatch) {
+                      matchedCount++;
+                    }
                   });
 
-                  if (hasDirectKeywordMatch) {
-                    matchedRows.push({ row, idx });
+                  if (matchedCount < includedCount && includedCount > 0) {
+                    sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas de forma COMPLETA para garantir a integridade de cálculos, somas, contagens ou cruzamentos de dados.)\n`;
                   }
-                });
+                } else {
+                  // Para tabelas maiores, usamos Bloco de Continuidade Dinâmica com busca inteligente
+                  const matchedIndices: number[] = [];
+                  rows.forEach((row: any, idx: number) => {
+                    const rowCellsText = headers.map((h: string) => {
+                      const val = row[h] !== undefined ? String(row[h]) : "";
+                      return normalizeText(val);
+                    }).join(" ");
+                    
+                    const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                      const normTerm = normalizeText(term);
+                      return rowCellsText.includes(normTerm);
+                    });
 
-                // 2. Segunda passada: Determinar quais registros enviar
-                // Se a aba for explicitamente visada (isTabTargeted) como TRANSFER ou ESCALAS, o usuário quer ver o panorama dessa aba.
-                // Nesse caso, o bloco de fallback contínuo é maior. Para outras abas, o fallback é mínimo (evita token explosion).
-                const maxFallback = isTabTargeted ? 30 : (isCriticalTab ? 8 : 3);
-                const maxRowsToInclude = isTabTargeted ? 120 : (isCriticalTab ? 50 : 15);
-
-                const selectedMatched = matchedRows.slice(0, maxRowsToInclude);
-                const fallbackRowsToInclude: { row: any; idx: number }[] = [];
-
-                if (selectedMatched.length < maxFallback) {
-                  const neededFallback = maxFallback - selectedMatched.length;
-                  for (let i = 0; i < Math.min(rows.length, neededFallback); i++) {
-                    if (!selectedMatched.some(m => m.idx === i)) {
-                      fallbackRowsToInclude.push({ row: rows[i], idx: i });
+                    if (hasDirectKeywordMatch) {
+                      matchedIndices.push(idx);
                     }
+                  });
+
+                  if (matchedIndices.length > 0) {
+                    // Encontramos correspondências! Para manter a integridade tática de listas sequenciais (como transfers consecutivos ou escala de horários),
+                    // enviamos um bloco CONTÍNUO de linhas desde o início (Reg 1) até o último registro correspondente encontrado (+ margem de segurança de 5 linhas).
+                    const lastMatchIdx = Math.max(...matchedIndices);
+                    
+                    // Limite dinâmico: abas visadas/citadas toleram blocos contínuos maiores para permitir análises globais.
+                    const maxContinuousLimit = isTabTargeted ? 300 : (isCriticalTab ? 150 : 50);
+                    const endIdx = Math.min(lastMatchIdx + 5, rows.length - 1, maxContinuousLimit);
+
+                    let matchedCount = 0;
+                    for (let i = 0; i <= endIdx; i++) {
+                      const row = rows[i];
+                      const rowCellsText = headers.map((h: string) => {
+                        const val = row[h] !== undefined ? String(row[h]) : "";
+                        return normalizeText(val);
+                      }).join(" ");
+                      
+                      const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                        const normTerm = normalizeText(term);
+                        return rowCellsText.includes(normTerm);
+                      });
+
+                      const tag = hasDirectKeywordMatch ? "MATCH" : "CONTEXTO-GERAL";
+                      const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                      sheetsContextText += `    [${tag} ${i + 1}] ${rowCells.join(" | ")}\n`;
+                      includedCount++;
+                      if (hasDirectKeywordMatch) {
+                        matchedCount++;
+                      }
+                    }
+
+                    // Se houver registros correspondentes adicionais além do bloco contínuo, incluímos eles pontualmente
+                    if (lastMatchIdx > endIdx) {
+                      sheetsContextText += `    ... (intervalo de segurança omitido para poupar tokens) ...\n`;
+                      matchedIndices.forEach((idx) => {
+                        if (idx > endIdx) {
+                          const row = rows[idx];
+                          const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                          sheetsContextText += `    [MATCH ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                          includedCount++;
+                        }
+                      });
+                    }
+
+                    if (matchedCount < includedCount) {
+                      sheetsContextText += `    (ATENÇÃO: as linhas marcadas como [CONTEXTO-GERAL] acima NÃO correspondem diretamente aos termos da pergunta, mas foram fornecidas para contextualizar a sequência e continuidade dos dados da aba "${tab.name}". Use apenas linhas [MATCH] para respostas diretas a pessoas/situações específicas.)\n`;
+                    }
+                  } else {
+                    // Sem correspondência direta:
+                    // Se a aba for visada ou crítica, mostramos um bloco contínuo inicial generoso para que a IA possa entender o contexto.
+                    // Se for secundária, mostramos apenas as 3 primeiras linhas como preview estrutural.
+                    const fallbackCount = isTabTargeted ? 50 : (isCriticalTab ? 20 : 3);
+                    const endIdx = Math.min(fallbackCount - 1, rows.length - 1);
+                    
+                    for (let i = 0; i <= endIdx; i++) {
+                      const row = rows[i];
+                      const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                      sheetsContextText += `    [CONTEXTO-GERAL ${i + 1}] ${rowCells.join(" | ")}\n`;
+                      includedCount++;
+                    }
+                    sheetsContextText += `    (ATENÇÃO: nenhuma linha desta aba correspondeu diretamente à pergunta. As linhas [CONTEXTO-GERAL] acima servem apenas como amostra estrutural.)\n`;
                   }
-                }
 
-                // Junta e ordena pelo índice original para que os dados apareçam na ordem cronológica/original da planilha
-                const finalRows = [...selectedMatched, ...fallbackRowsToInclude]
-                  .sort((a, b) => a.idx - b.idx);
-
-                finalRows.forEach(({ row, idx }) => {
-                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
-                  sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
-                  includedCount++;
-                });
-
-                if (includedCount === 0) {
-                  sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca: [${searchTerms.join(", ")}].)\n`;
-                } else if (rows.length > includedCount) {
-                  sheetsContextText += `    (Nota: Mostrando ${includedCount} de ${rows.length} registros para otimização de tokens)\n`;
+                  if (rows.length > includedCount) {
+                    sheetsContextText += `    (Nota: Otimizado enviando ${includedCount} de ${rows.length} registros para preservar o limite de tokens)\n`;
+                  }
                 }
               }
             } else {
