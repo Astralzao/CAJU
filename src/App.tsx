@@ -470,28 +470,14 @@ export default function App() {
         if (tab.rows && tab.rows.length > 0) {
           const headers = tab.headers.map(h => h.toLowerCase().trim());
           
-          // 1. Look for Contact info
+          // 1. Look for Contact/Member lists (Categorical suggestion)
           const nameIdx = headers.findIndex(h => h.includes("nome") || h.includes("conselheiro") || h.includes("embaixador") || h.includes("ej") || h.includes("empresa"));
-          const contactIdx = headers.findIndex(h => h.includes("contato") || h.includes("telefone") || h.includes("email") || h.includes("whatsapp") || h.includes("celular"));
           
-          if (nameIdx !== -1 && tab.rows[0]) {
-            const row = tab.rows[0];
-            const nameCol = tab.headers[nameIdx];
-            const nameValue = String(row[nameCol] || "").trim();
-            
-            if (nameValue && nameValue.length < 50) {
-              if (contactIdx !== -1) {
-                suggestions.push({
-                  text: `Qual o contato do ${nameValue} (${sheet.name})?`,
-                  display: `📞 Contato de ${nameValue}`
-                });
-              } else {
-                suggestions.push({
-                  text: `Quais são os dados cadastrados para ${nameValue}?`,
-                  display: `👤 Info: ${nameValue}`
-                });
-              }
-            }
+          if (nameIdx !== -1) {
+            suggestions.push({
+              text: `Quais contatos e integrantes estão registrados na aba "${tab.name}"?`,
+              display: `📞 Contatos de ${tab.name}`
+            });
           }
 
           // 2. Look for Procedures/Incidents

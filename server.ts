@@ -1047,8 +1047,37 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                     tabNameLower.includes("quarto") ||
                                     tabNameLower.includes("hospedagem");
 
-              // Se o usuário não incluiu termos de busca e a aba não for visada/crítica, envia apenas cabeçalho curto para economizar tokens
-              if (searchTerms.length === 0 && !isCriticalTab) {
+              const isTransferTab = tabNameLower.includes("transfer") || 
+                                    (userMessageLower.includes("transfer") && 
+                                     (tabNameLower.includes("transporte") || 
+                                      tabNameLower.includes("escala") || 
+                                      tabNameLower.includes("voo") || 
+                                      tabNameLower.includes("chegada") || 
+                                      tabNameLower.includes("partida")));
+
+              if (isTransferTab) {
+                let matchedCount = 0;
+                rows.forEach((row: any, idx: number) => {
+                  const rowCellsText = headers.map((h: string) => {
+                    const val = row[h] !== undefined ? String(row[h]) : "";
+                    return normalizeText(val);
+                  }).join(" ");
+                  
+                  const hasDirectKeywordMatch = searchTerms.some((term: string) => {
+                    const normTerm = normalizeText(term);
+                    return rowCellsText.includes(normTerm);
+                  });
+
+                  const tag = hasDirectKeywordMatch ? "MATCH" : "INTEGRAL-TRANSFER";
+                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [${tag} ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                  includedCount++;
+                  if (hasDirectKeywordMatch) {
+                    matchedCount++;
+                  }
+                });
+                sheetsContextText += `    (ATENÇÃO: os dados de TRANSFER da aba "${tab.name}" foram fornecidos de forma 100% INTEGRAL a pedido do usuário para que a IA filtre e agrupe a resposta com base na pergunta. Filtre de acordo com as instruções do usuário.)\n`;
+              } else if (searchTerms.length === 0 && !isCriticalTab) {
                 sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Pergunte sobre dados desta aba para visualizá-los.)\n`;
               } else {
                 // Se a aba for pequena (até 80 linhas), enviamos 100% dos dados para precisão matemática absoluta.
