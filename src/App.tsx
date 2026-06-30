@@ -35,6 +35,7 @@ import {
 export default function App() {
   const [spreadsheets, setSpreadsheets] = useState<Spreadsheet[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeHistoryIndex, setActiveHistoryIndex] = useState<number>(0);
   
   // Tab control for the main Workspace
   const [activeAdminTab, setActiveAdminTab] = useState<"upload" | "tables" | "config" >("upload");
@@ -417,7 +418,7 @@ export default function App() {
         },
         body: JSON.stringify({
           message: text,
-          history: messages,
+          history: messages.slice(activeHistoryIndex),
           customApiKey: currentApiKey,
           apiProvider: apiProvider,
           apiModel: apiModel,
@@ -442,6 +443,10 @@ export default function App() {
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
+      
+      if (data.resetHistory) {
+        setActiveHistoryIndex(newMessages.length + 1);
+      }
     } catch (err: any) {
       console.error("Erro na comunicação com a API:", err);
       setErrorMessage(

@@ -915,20 +915,47 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       });
     }
 
+    let shouldResetHistory = false;
+    let actualHistory = history || [];
+
     // Inteligência de contexto para perguntas continuadas (ex: "E da Adm Consult?")
     if (history && Array.isArray(history)) {
       const userMessages = history
         .filter((msg: any) => msg.role === "user")
         .map((msg: any) => msg.content.toLowerCase());
 
-      const words = userMessageLower.split(/\s+/);
-      const isContinuation = words.some(w => 
-        ["e", "qual", "quem", "onde", "quanto", "quantos", "como", "telas", "planilha", "aba", "de", "da", "do"].includes(w)
-      ) || words.length < 5;
+      const checkIsContinuation = (text: string) => {
+        const textLower = text.toLowerCase();
+        const words = textLower.split(/\s+/);
+        return words.some(w => 
+          ["e", "qual", "quem", "onde", "quanto", "quantos", "como", "telas", "planilha", "aba", "de", "da", "do"].includes(w)
+        ) || words.length < 5;
+      };
 
-      if (isContinuation && userMessages.length > 0) {
+      const currentIsContinuation = checkIsContinuation(userMessageLower);
+
+      if (currentIsContinuation) {
+        let consecutiveContinuations = 1; // conta a atual
+        // Varre de trás para frente no histórico
+        for (let i = userMessages.length - 1; i >= 0; i--) {
+          if (checkIsContinuation(userMessages[i])) {
+            consecutiveContinuations++;
+          } else {
+            break;
+          }
+        }
+
+        if (consecutiveContinuations > 3) {
+          shouldResetHistory = true;
+          actualHistory = [];
+          console.log(`⚠️ Limite de 3 perguntas consecutivas de continuação atingido. Resetando histórico da sessão para evitar alucinações.`);
+        }
+      }
+
+      if (!shouldResetHistory && currentIsContinuation && userMessages.length > 0) {
         let lastUserMsg = userMessages[userMessages.length - 1];
         
+        const words = userMessageLower.split(/\s+/);
         // Se a mensagem atual cita abas específicas, removemos do histórico do usuário referências a OUTRAS abas para não misturar contextos de entidades distintas
         const tabsInCurrent = allTabNames.filter(tabName => 
           tabName.length > 2 && normalizeText(userMessageLower).includes(tabName)
@@ -1252,8 +1279,8 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
       const formattedContents: any[] = [];
       const maxHistoryMessages = 4;
       
-      if (history && Array.isArray(history)) {
-        const lastMessages = history.slice(-maxHistoryMessages);
+      if (actualHistory && Array.isArray(actualHistory)) {
+        const lastMessages = actualHistory.slice(-maxHistoryMessages);
         lastMessages.forEach((msg: any) => {
           let content = msg.content || "";
           // Truncar mensagens muito longas do assistente para não acumular tokens no histórico
@@ -1444,8 +1471,8 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
       ];
 
       const maxHistoryMessages = 4;
-      if (history && Array.isArray(history)) {
-        const lastMessages = history.slice(-maxHistoryMessages);
+      if (actualHistory && Array.isArray(actualHistory)) {
+        const lastMessages = actualHistory.slice(-maxHistoryMessages);
         lastMessages.forEach((msg: any) => {
           let content = msg.content || "";
           // Truncar mensagens muito longas do assistente para não acumular tokens no histórico
@@ -1524,7 +1551,11 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
       }
     }
 
-    res.json({ reply });
+    if (shouldResetHistory) {
+      reply = `[REINÍCIO DE CONTEXTO]\nEste chat foi reiniciado automaticamente porque atingimos o limite de 3 perguntas consecutivas com base no histórico anterior. Isso evita alucinações e garante que novas consultas sejam 100% precisas em relação aos dados atuais.\n\n${reply}`;
+    }
+
+    res.json({ reply, resetHistory: shouldResetHistory });
 
   } catch (err: any) {
     const provider = req.body?.apiProvider || "gemini";
