@@ -890,23 +890,30 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       } catch (e) {}
     }
 
-    // 1. Extrair termos de busca inteligentes da mensagem atual
+    // 1. Extrair termos de busca inteligentes da mensagem atual e fundir contexto anterior se for continuação
     const userMessageLower = message.toLowerCase();
     let combinedTextForSearch = userMessageLower;
 
-    // Se a mensagem atual for curta (poucos termos de busca), podemos incluir a última mensagem do USUÁRIO (nunca do assistente)
-    // para manter o contexto em perguntas de acompanhamento (ex: "e o contato dele?") sem contaminar a busca com as respostas longas do assistente.
-    const currentTerms = userMessageLower
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ")
-      .split(/\s+/)
-      .filter((term: string) => term.length > 2 && !["dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", "nas", "aos", "aas"].includes(term));
+    // Inteligência de contexto para perguntas continuadas (ex: "E da Adm Consult?")
+    if (history && Array.isArray(history)) {
+      const userMessages = history
+        .filter((msg: any) => msg.role === "user")
+        .map((msg: any) => msg.content.toLowerCase());
 
-    if (currentTerms.length < 2 && history && Array.isArray(history)) {
-      const lastUserMsg = [...history]
-        .reverse()
-        .find((msg: any) => msg.role === "user");
-      if (lastUserMsg) {
-        combinedTextForSearch = `${userMessageLower} ${lastUserMsg.content.toLowerCase()}`;
+      const words = userMessageLower.split(/\s+/);
+      const isContinuation = words.some(w => 
+        ["e", "qual", "quem", "onde", "quanto", "quantos", "como", "telas", "planilha", "aba", "de", "da", "do"].includes(w)
+      ) || words.length < 5;
+
+      if (isContinuation && userMessages.length > 0) {
+        const lastUserMsg = userMessages[userMessages.length - 1];
+        combinedTextForSearch = `${userMessageLower} ${lastUserMsg}`;
+        
+        // Se for curtíssima (ex: "E da Adm?"), puxa também a penúltima
+        if (words.length <= 3 && userMessages.length > 1) {
+          const secondLastUserMsg = userMessages[userMessages.length - 2];
+          combinedTextForSearch = `${combinedTextForSearch} ${secondLastUserMsg}`;
+        }
       }
     }
 
@@ -970,7 +977,6 @@ app.post("/api/chat", async (req: Request, res: Response) => {
             if (rows.length > 0) {
               sheetsContextText += `  Linhas:\n`;
               let includedCount = 0;
-              let matchedCount = 0;
 
               const tabNameLower = (tab.name || "").toLowerCase();
               const normalizedTabName = normalizeText(tab.name || "");
@@ -998,19 +1004,9 @@ app.post("/api/chat", async (req: Request, res: Response) => {
               if (searchTerms.length === 0 && !isCriticalTab) {
                 sheetsContextText += `    (Nenhum termo de busca na pergunta. Linhas ocultadas para economizar tokens. Pergunte sobre dados desta aba para visualizá-los.)\n`;
               } else {
-                // Definindo limites dinâmicos e generosos dependendo da importância da aba
-                // Se a aba for explicitamente visada (isTabTargeted), enviamos um bloco contínuo de até 150 linhas
-                // para permitir cálculos, somas e agrupamentos completos com precisão matemática impecável.
-                // Se for apenas crítica, enviamos até 45 linhas contínuas.
-                // Outras abas genéricas recebem até 12 linhas contínuas de segurança.
-                const fallbackCount = isTabTargeted ? 150 : (isCriticalTab ? 45 : 12);
-                const maxRowsToInclude = isTabTargeted ? 200 : (isCriticalTab ? 75 : 25);
-
+                // 1. Primeira passada: Varre a aba INTEIRA em busca de correspondências diretas dos termos de busca
+                const matchedRows: { row: any; idx: number }[] = [];
                 rows.forEach((row: any, idx: number) => {
-                  if (includedCount >= maxRowsToInclude) {
-                    return;
-                  }
-
                   const rowCellsText = headers.map((h: string) => {
                     const val = row[h] !== undefined ? String(row[h]) : "";
                     return normalizeText(val);
@@ -1021,26 +1017,44 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                     const normTerm = normalizeText(term);
                     return rowCellsText.includes(normTerm);
                   });
-                  
-                  // Fallback sequencial para garantir continuidade e bloco íntegro de dados
-                  const isBasicContextFallback = idx < fallbackCount;
 
-                  const isMatch = hasDirectKeywordMatch || isBasicContextFallback;
-                  
-                  if (isMatch) {
-                    const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
-                    sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
-                    includedCount++;
-                    if (hasDirectKeywordMatch) {
-                      matchedCount++;
-                    }
+                  if (hasDirectKeywordMatch) {
+                    matchedRows.push({ row, idx });
                   }
                 });
 
+                // 2. Segunda passada: Determinar quais registros enviar
+                // Se a aba for explicitamente visada (isTabTargeted) como TRANSFER ou ESCALAS, o usuário quer ver o panorama dessa aba.
+                // Nesse caso, o bloco de fallback contínuo é maior. Para outras abas, o fallback é mínimo (evita token explosion).
+                const maxFallback = isTabTargeted ? 30 : (isCriticalTab ? 8 : 3);
+                const maxRowsToInclude = isTabTargeted ? 120 : (isCriticalTab ? 50 : 15);
+
+                const selectedMatched = matchedRows.slice(0, maxRowsToInclude);
+                const fallbackRowsToInclude: { row: any; idx: number }[] = [];
+
+                if (selectedMatched.length < maxFallback) {
+                  const neededFallback = maxFallback - selectedMatched.length;
+                  for (let i = 0; i < Math.min(rows.length, neededFallback); i++) {
+                    if (!selectedMatched.some(m => m.idx === i)) {
+                      fallbackRowsToInclude.push({ row: rows[i], idx: i });
+                    }
+                  }
+                }
+
+                // Junta e ordena pelo índice original para que os dados apareçam na ordem cronológica/original da planilha
+                const finalRows = [...selectedMatched, ...fallbackRowsToInclude]
+                  .sort((a, b) => a.idx - b.idx);
+
+                finalRows.forEach(({ row, idx }) => {
+                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [Reg ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                  includedCount++;
+                });
+
                 if (includedCount === 0) {
-                  sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca: [${searchTerms.join(", ")}]. Filtrado para economizar tokens.)\n`;
+                  sheetsContextText += `    (Nenhum registro correspondeu aos termos de busca: [${searchTerms.join(", ")}].)\n`;
                 } else if (rows.length > includedCount) {
-                  sheetsContextText += `    (Nota: Mostrando ${includedCount} registros de relevância de um total de ${rows.length} desta aba para otimizar o contexto)\n`;
+                  sheetsContextText += `    (Nota: Mostrando ${includedCount} de ${rows.length} registros para otimização de tokens)\n`;
                 }
               }
             } else {
