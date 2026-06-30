@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import * as XLSX from "xlsx";
 import { GoogleGenAI } from "@google/genai";
+import { google } from "googleapis";
 import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 
 // Load environment variables from .env
@@ -363,6 +364,109 @@ function saveQueryTransactions() {
   } catch (err) {
     console.error("❌ Erro ao salvar transações de consulta no disco:", err);
   }
+}
+
+async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+  const spreadsheetId = process.env.GOOGLE_SHEETS_LOG_SPREADSHEET_ID;
+
+  if (!clientEmail || !privateKey || !spreadsheetId) {
+    // Google Sheets logging is not configured; skip silently
+    return;
+  }
+
+  try {
+    // Process private key to restore newline characters (common issue with Vercel env vars)
+    privateKey = privateKey.replace(/\\n/g, "\n");
+
+    const auth = new google.auth.JWT(
+      clientEmail,
+      null,
+      privateKey,
+      ["https://www.googleapis.com/auth/spreadsheets"]
+    );
+
+    const sheets = google.sheets({ version: "v4", auth });
+
+    // Try to read first row to check if headers are already written
+    let hasHeaders = false;
+    try {
+      const checkRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "A1:B1",
+      });
+      if (checkRes.data.values && checkRes.data.values.length > 0) {
+        hasHeaders = true;
+      }
+    } catch (readErr) {
+      // If we fail to read, assume headers are not written or sheet is completely blank
+    }
+
+    if (!hasHeaders) {
+      const headers = [
+        "ID da Transação",
+        "Data/Hora (UTC)",
+        "ID da Sessão (Dispositivo)",
+        "Pergunta do Usuário",
+        "Modelo Utilizado",
+        "Tokens de Entrada",
+        "Tokens de Saída",
+        "Total de Tokens",
+        "Custo Estimado (USD)",
+        "Custo Estimado (BRL)",
+        "Chave Utilizada"
+      ];
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: "A1",
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [headers],
+        },
+      });
+    }
+
+    // Format row values nicely
+    const row = [
+      tx.id,
+      tx.timestamp,
+      tx.deviceSessionId,
+      tx.userQuery,
+      tx.model,
+      tx.promptTokens,
+      tx.candidatesTokens,
+      tx.totalTokens,
+      tx.estimatedCostUSD,
+      tx.estimatedCostBRL,
+      tx.keyIndex !== undefined && tx.keyIndex >= 0 
+        ? `Chave Pool #${tx.keyIndex + 1}` 
+        : tx.keyIndex === -1 
+          ? "Chave Única/Personalizada" 
+          : "Outro Provedor"
+    ];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: "A:K",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [row],
+      },
+    });
+
+    console.log(`✅ [GOOGLE SHEETS LOG] Transação ${tx.id} enviada para a planilha com sucesso.`);
+  } catch (err: any) {
+    console.error("❌ [GOOGLE SHEETS LOG] Falha ao enviar transação para o Google Sheets:", err.message || err);
+  }
+}
+
+function registerQueryTransaction(tx: QueryTransaction) {
+  queryTransactions.push(tx);
+  saveQueryTransactions();
+  appendTransactionToGoogleSheets(tx).catch(err => {
+    console.error("❌ [GOOGLE SHEETS LOG] Erro assíncrono na rotina do Google Sheets:", err);
+  });
 }
 
 // Cost calculation utility based on official API pricing per 1M tokens
@@ -911,21 +1015,26 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 - Seja preciso, direto e conciso. Cite explicitamente a aba de origem (ex: "De acordo com a aba 'X'"). Não invente dados de contato ou horários.
 - Forneça contatos de EJs, conselheiros, pós-juniores, canga ou similares APENAS se perguntado especificamente sobre eles. Não inclua esses contatos em dúvidas operacionais gerais.
 
-2. CONTATOS E ACIONAMENTO OPERACIONAL:
-- Indique no INÍCIO da resposta os responsáveis/embaixadores encontrados na planilha.
+2. TRATAMENTO DE PERGUNTAS FORA DE CONTEXTO OU DADOS INEXISTENTES:
+- Se o usuário fizer uma pergunta sobre fatos específicos, horários, atribuições de tarefas ou alocações individuais de pessoas ou organizações que NÃO constam em nenhuma planilha da base de dados (Exemplos: "o que fulano de tal vai fazer no primeiro dia?", "qual a minha alocação?", "qual a alocação de fulano de tal?"), NÃO formule planos de ação, NÃO liste embaixadores e NÃO invente dados. Responda de forma extremamente simples, direta e curta, informando apenas que não há registros ou dados sobre isso na planilha atual.
+- EXCEÇÃO PARA SITUAÇÕES NARRADAS / INCIDENTES OPERACIONAIS: Se o usuário narrar uma situação real ou problema simulado ocorrido no evento (Exemplos: "um congressista está passando mal", "falta de energia na sala de palestra", "atraso de palestrante"), aplique bom senso e elabore um plano de ação prático usando metodologias de contingência. No entanto, inclua nos contatos de acionamento APENAS contatos que sejam estritamente pertinentes àquele problema específico (ex: não liste contatos de comercial ou marcas se a situação for médica).
+- BOM SENSO NO ESCOPO: Use discernimento inteligente e bom senso. Separe de forma muito clara o que é pertinente à dúvida do usuário do que não é. Se a dúvida não tem relação direta com dados da planilha ou com incidentes operacionais a serem resolvidos, diga apenas que não encontrou informações.
+
+3. CONTATOS E ACIONAMENTO OPERACIONAL:
+- Indique no INÍCIO da resposta os responsáveis/embaixadores encontrados na planilha pertinentes à situação.
 - REGRA DE ACIONAMENTO: Selecione e liste no MÁXIMO 1 ou 2 embaixadores estritamente necessários e relevantes para a situação. Nunca liste múltiplos contatos redundantes ou desnecessários.
 - REGRA DE PALESTRANTES/MARCAS: Se o problema envolver palestrantes, patrocinadores, marcas ou fornecedores externos, procure ativamente nas planilhas (abas 'EMBAIXADORES', 'PALESTRANTES' ou equivalentes) os nomes reais e telefones dos responsáveis diretos da organização (chamados 'Remelas') por Conteúdo, Comercial, Parcerias, Marcas e liste-os obrigatoriamente de forma nominal com telefone.
 
-3. AUTONOMIA TOTAL DO STAFF:
+4. AUTONOMIA TOTAL DO STAFF:
 - DIRETRIZ: Staff tem autonomia total. Resolva o problema localmente e de imediato de forma independente.
 - Não delegue nem condicione a ação do staff à presença física ou ação exclusiva do embaixador. Dê autonomia prática para agir no local usando metodologias adequadas.
 - Se a situação exigir escalonamento urgente, inclua no final: "Se a situação não for resolvida imediatamente, entre em contato com os responsáveis acima."
 - PROIBIÇÃO DE METATEXTO: É terminantemente proibido criar seções explicativas das regras do prompt ou justificativas (ex: "ESCLARECIMENTO", "autonomia"). Vá direto ao ponto.
 
-4. ANÁLISE E RESOLUÇÃO:
-- Aplique metodologias estruturadas (Matriz SWOT/FOFA, Matriz de Risco, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil) para propor planos de ação práticos e mitigação de riscos de forma proativa.
+5. ANÁLISE E RESOLUÇÃO DE INCIDENTES:
+- Para incidentes operacionais válidos, aplique metodologias estruturadas (Matriz SWOT/FOFA, Matriz de Risco, GUT, FMEA, Planejamento de Contingência, Metodologia Ágil) para propor planos de ação práticos e mitigação de riscos de forma proativa.
 
-5. FORMATAÇÃO (TEXTO TOTALMENTE LIMPO - ZERO MARKDOWN):
+6. FORMATAÇÃO (TEXTO TOTALMENTE LIMPO - ZERO MARKDOWN):
 - TERMINANTEMENTE PROIBIDO usar formatação Markdown.
 - NÃO use asteriscos (* ou **) para negrito/itálico.
 - NÃO use hashtags (#, ##, ###) para títulos. Use apenas LETRAS MAIÚSCULAS para títulos de destaque (ex: "PASSO 1: ISOLAMENTO").
@@ -1017,7 +1126,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
               // Save detailed request transaction
               const { costUSD, costBRL } = calculateModelCost(apiModel || "gemini-2.5-flash", inT, outT);
-              queryTransactions.push({
+              registerQueryTransaction({
                 id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
                 timestamp: new Date().toISOString(),
                 deviceSessionId: deviceSessionId || "unknown",
@@ -1030,7 +1139,6 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
                 estimatedCostBRL: costBRL,
                 keyIndex: keyIndex
               });
-              saveQueryTransactions();
             }
 
             replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
@@ -1097,7 +1205,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
           // Save detailed request transaction
           const { costUSD, costBRL } = calculateModelCost(apiModel || "gemini-2.5-flash", inT, outT);
-          queryTransactions.push({
+          registerQueryTransaction({
             id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             timestamp: new Date().toISOString(),
             deviceSessionId: deviceSessionId || "unknown",
@@ -1110,7 +1218,6 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
             estimatedCostBRL: costBRL,
             keyIndex: -1 // Custom single key
           });
-          saveQueryTransactions();
         }
 
         reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
@@ -1178,7 +1285,7 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
         // Save detailed request transaction
         const { costUSD, costBRL } = calculateModelCost(finalModel, inT, outT);
-        queryTransactions.push({
+        registerQueryTransaction({
           id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           timestamp: new Date().toISOString(),
           deviceSessionId: deviceSessionId || "unknown",
@@ -1191,7 +1298,6 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
           estimatedCostBRL: costBRL,
           keyIndex: -2 // Other provider code
         });
-        saveQueryTransactions();
       }
     }
 
