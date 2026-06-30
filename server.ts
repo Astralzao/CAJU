@@ -320,6 +320,82 @@ interface KeyStats {
 let geminiKeyPool: string[] = [];
 let geminiKeyStats: Record<number, KeyStats> = {};
 
+// Detailed query transaction tracker
+const TRANSACTIONS_PATH = getWritablePath("gemini-transactions-db.json");
+
+interface QueryTransaction {
+  id: string;
+  timestamp: string;
+  deviceSessionId: string;
+  userQuery: string;
+  model: string;
+  promptTokens: number;
+  candidatesTokens: number;
+  totalTokens: number;
+  estimatedCostUSD: number;
+  estimatedCostBRL: number;
+  keyIndex: number;
+}
+
+let queryTransactions: QueryTransaction[] = [];
+
+function loadQueryTransactions() {
+  try {
+    if (fs.existsSync(TRANSACTIONS_PATH)) {
+      const data = JSON.parse(fs.readFileSync(TRANSACTIONS_PATH, "utf8"));
+      if (Array.isArray(data)) {
+        queryTransactions = data;
+        console.log(`📂 [TRANSACTION PERSISTENCE] ${queryTransactions.length} transações de consulta carregadas do disco.`);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Erro ao carregar transações de consulta do disco:", err);
+  }
+}
+
+function saveQueryTransactions() {
+  try {
+    // Keep only last 500 records to prevent bloating the JSON file
+    if (queryTransactions.length > 500) {
+      queryTransactions = queryTransactions.slice(-500);
+    }
+    fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(queryTransactions, null, 2), "utf8");
+  } catch (err) {
+    console.error("❌ Erro ao salvar transações de consulta no disco:", err);
+  }
+}
+
+// Cost calculation utility based on official API pricing per 1M tokens
+function calculateModelCost(model: string, inputTokens: number, outputTokens: number) {
+  const modelLower = (model || "").toLowerCase();
+  let inputRate = 0.30;  // default to gemini-2.5-flash: $0.30 per 1M input
+  let outputRate = 2.50; // default to gemini-2.5-flash: $2.50 per 1M output
+
+  if (modelLower.includes("1.5-flash") || modelLower.includes("1.5_flash")) {
+    inputRate = 0.075;
+    outputRate = 0.30;
+  } else if (modelLower.includes("1.5-pro") || modelLower.includes("1.5_pro")) {
+    inputRate = 1.25;
+    outputRate = 5.00;
+  } else if (modelLower.includes("2.5-pro") || modelLower.includes("2.5_pro")) {
+    inputRate = 1.25;
+    outputRate = 5.00;
+  } else if (modelLower.includes("gpt-4o-mini")) {
+    inputRate = 0.150;
+    outputRate = 0.600;
+  } else if (modelLower.includes("gpt-4o")) {
+    inputRate = 2.50;
+    outputRate = 10.00;
+  } else if (modelLower.includes("llama-3")) {
+    inputRate = 0.05;
+    outputRate = 0.08;
+  }
+
+  const costUSD = (inputTokens * inputRate + outputTokens * outputRate) / 1000000;
+  const costBRL = costUSD * 5.50; // Exchange rate estimated at 5.50 BRL/USD
+  return { costUSD, costBRL };
+}
+
 function loadGeminiKeyStats() {
   try {
     if (fs.existsSync(KEY_STATS_PATH)) {
@@ -377,6 +453,7 @@ function initGeminiKeyPool() {
 
   // Load existing persistent stats
   loadGeminiKeyStats();
+  loadQueryTransactions();
 
   const freshStats: Record<number, KeyStats> = {};
   
@@ -515,6 +592,50 @@ app.get("/api/key-stats", (req: Request, res: Response) => {
   });
 });
 
+// Endpoint to view detailed query transactions
+app.get("/api/transactions", (req: Request, res: Response) => {
+  res.json({
+    transactions: queryTransactions
+  });
+});
+
+// Endpoint to secure and download a backup of key stats and transactions
+app.get("/api/admin/backup", checkAdminAuth, (req: Request, res: Response) => {
+  if (geminiKeyPool.length === 0) {
+    initGeminiKeyPool();
+  }
+  res.json({
+    geminiKeyStats: geminiKeyStats,
+    queryTransactions: queryTransactions
+  });
+});
+
+// Endpoint to restore stats and transactions from a JSON backup
+app.post("/api/admin/restore", checkAdminAuth, (req: Request, res: Response) => {
+  const { geminiKeyStats: importedStats, queryTransactions: importedTransactions } = req.body;
+  let restoredStats = false;
+  let restoredTransactions = false;
+
+  if (importedStats && typeof importedStats === "object") {
+    geminiKeyStats = importedStats;
+    saveGeminiKeyStats();
+    restoredStats = true;
+  }
+
+  if (Array.isArray(importedTransactions)) {
+    queryTransactions = importedTransactions;
+    saveQueryTransactions();
+    restoredTransactions = true;
+  }
+
+  res.json({
+    success: true,
+    message: "Backup restaurado com sucesso!",
+    restoredStats,
+    restoredTransactions
+  });
+});
+
 // Authentication verify endpoint
 app.post("/api/auth", (req: Request, res: Response) => {
   const { password } = req.body;
@@ -595,7 +716,8 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       apiModel, 
       customGoogleSheetUrl, 
       customGoogleSheetTabs, 
-      clientSpreadsheets 
+      clientSpreadsheets,
+      deviceSessionId
     } = req.body;
 
     if (!message) {
@@ -653,13 +775,26 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       } catch (e) {}
     }
 
-    // 1. Extrair termos de busca inteligentes da mensagem atual e das últimas mensagens do histórico
+    // 1. Extrair termos de busca inteligentes da mensagem atual
     const userMessageLower = message.toLowerCase();
-    const historyText = (history && Array.isArray(history)) 
-      ? history.slice(-2).map((h: any) => h.content.toLowerCase()).join(" ") 
-      : "";
-    const combinedTextForSearch = `${userMessageLower} ${historyText}`;
-    
+    let combinedTextForSearch = userMessageLower;
+
+    // Se a mensagem atual for curta (poucos termos de busca), podemos incluir a última mensagem do USUÁRIO (nunca do assistente)
+    // para manter o contexto em perguntas de acompanhamento (ex: "e o contato dele?") sem contaminar a busca com as respostas longas do assistente.
+    const currentTerms = userMessageLower
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ")
+      .split(/\s+/)
+      .filter((term: string) => term.length > 2 && !["dos", "das", "com", "para", "uma", "uns", "por", "sobre", "como", "quem", "qual", "onde", "quando", "quais", "esta", "este", "esse", "essa", "tudo", "nada", "que", "ele", "ela", "dele", "dela", "nos", "nas", "aos", "aas"].includes(term));
+
+    if (currentTerms.length < 2 && history && Array.isArray(history)) {
+      const lastUserMsg = [...history]
+        .reverse()
+        .find((msg: any) => msg.role === "user");
+      if (lastUserMsg) {
+        combinedTextForSearch = `${userMessageLower} ${lastUserMsg.content.toLowerCase()}`;
+      }
+    }
+
     const searchTerms = combinedTextForSearch
       .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ")
       .split(/\s+/)
@@ -879,6 +1014,23 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
               console.log(`   Tokens de Saída (Resposta da IA): ${outT}`);
               console.log(`   Total de Tokens nesta consulta: ${totT}`);
               console.log(`   Consumo Acumulado desta Chave: ${stats.totalTokens} tokens (Sucessos: ${stats.successCount})`);
+
+              // Save detailed request transaction
+              const { costUSD, costBRL } = calculateModelCost(apiModel || "gemini-2.5-flash", inT, outT);
+              queryTransactions.push({
+                id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                timestamp: new Date().toISOString(),
+                deviceSessionId: deviceSessionId || "unknown",
+                userQuery: message,
+                model: apiModel || "gemini-2.5-flash",
+                promptTokens: inT,
+                candidatesTokens: outT,
+                totalTokens: totT,
+                estimatedCostUSD: costUSD,
+                estimatedCostBRL: costBRL,
+                keyIndex: keyIndex
+              });
+              saveQueryTransactions();
             }
 
             replyText = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
@@ -934,10 +1086,31 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
         });
 
         if (response.usageMetadata) {
+          const inT = response.usageMetadata.promptTokenCount || 0;
+          const outT = response.usageMetadata.candidatesTokenCount || 0;
+          const totT = response.usageMetadata.totalTokenCount || 0;
+
           console.log("📊 [GEMINI RAG USAGE - CHAVE ÚNICA/PERSONALIZADA]");
-          console.log(`   Tokens de Entrada (Contexto + Prompt): ${response.usageMetadata.promptTokenCount}`);
-          console.log(`   Tokens de Saída (Resposta da IA): ${response.usageMetadata.candidatesTokenCount}`);
-          console.log(`   Total de Tokens nesta consulta: ${response.usageMetadata.totalTokenCount}`);
+          console.log(`   Tokens de Entrada (Contexto + Prompt): ${inT}`);
+          console.log(`   Tokens de Saída (Resposta da IA): ${outT}`);
+          console.log(`   Total de Tokens nesta consulta: ${totT}`);
+
+          // Save detailed request transaction
+          const { costUSD, costBRL } = calculateModelCost(apiModel || "gemini-2.5-flash", inT, outT);
+          queryTransactions.push({
+            id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            timestamp: new Date().toISOString(),
+            deviceSessionId: deviceSessionId || "unknown",
+            userQuery: message,
+            model: apiModel || "gemini-2.5-flash",
+            promptTokens: inT,
+            candidatesTokens: outT,
+            totalTokens: totT,
+            estimatedCostUSD: costUSD,
+            estimatedCostBRL: costBRL,
+            keyIndex: -1 // Custom single key
+          });
+          saveQueryTransactions();
         }
 
         reply = response.text || "Não foi possível gerar uma resposta para essa pergunta.";
@@ -997,6 +1170,29 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 
       const responseData = await response.json();
       reply = responseData.choices?.[0]?.message?.content || "Não foi possível obter resposta do provedor de IA.";
+
+      if (responseData.usage) {
+        const inT = responseData.usage.prompt_tokens || 0;
+        const outT = responseData.usage.completion_tokens || 0;
+        const totT = responseData.usage.total_tokens || 0;
+
+        // Save detailed request transaction
+        const { costUSD, costBRL } = calculateModelCost(finalModel, inT, outT);
+        queryTransactions.push({
+          id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: new Date().toISOString(),
+          deviceSessionId: deviceSessionId || "unknown",
+          userQuery: message,
+          model: finalModel,
+          promptTokens: inT,
+          candidatesTokens: outT,
+          totalTokens: totT,
+          estimatedCostUSD: costUSD,
+          estimatedCostBRL: costBRL,
+          keyIndex: -2 // Other provider code
+        });
+        saveQueryTransactions();
+      }
     }
 
     res.json({ reply });

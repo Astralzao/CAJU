@@ -24,7 +24,12 @@ import {
   Key,
   Layers,
   RefreshCw,
-  X
+  X,
+  Download,
+  Upload,
+  History,
+  DollarSign,
+  Search
 } from "lucide-react";
 
 export default function App() {
@@ -86,6 +91,16 @@ export default function App() {
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
+  // Device session ID for individual token and query tracking
+  const [deviceSessionId] = useState<string>(() => {
+    let id = localStorage.getItem("destine_device_session_id");
+    if (!id) {
+      id = `cel-${Math.random().toString(36).substring(2, 8)}-${Date.now().toString().slice(-6)}`;
+      localStorage.setItem("destine_device_session_id", id);
+    }
+    return id;
+  });
+
   // States for API Key pool monitoring
   const [keyStats, setKeyStats] = useState<any[]>([]);
   const [poolSize, setPoolSize] = useState<number>(0);
@@ -107,10 +122,108 @@ export default function App() {
     }
   };
 
+  // States for detailed query transactions logs
+  const [queryTransactions, setQueryTransactions] = useState<any[]>([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState<boolean>(false);
+  const [transactionSearchQuery, setTransactionSearchQuery] = useState<string>("");
+  const [expandedTransactionId, setExpandedTransactionId] = useState<string | null>(null);
+
+  const fetchTransactions = async () => {
+    try {
+      setIsLoadingTransactions(true);
+      const res = await fetch("/api/transactions");
+      if (res.ok) {
+        const data = await res.json();
+        // Sort descending (newest first)
+        const sorted = (data.transactions || []).sort((a: any, b: any) => {
+          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+        });
+        setQueryTransactions(sorted);
+      }
+    } catch (e) {
+      console.error("Erro ao carregar transações de consultas:", e);
+    } finally {
+      setIsLoadingTransactions(false);
+    }
+  };
+
+  // Export statistics and transaction history backup to JSON
+  const handleExportBackup = async () => {
+    try {
+      const res = await fetch("/api/admin/backup", {
+        headers: {
+          "Authorization": `Bearer ${adminPassword}`
+        }
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Erro ao obter backup do servidor.");
+      }
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `backup-destine-stats-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert("Erro ao exportar backup: " + e.message);
+    }
+  };
+
+  // Import statistics and transaction history backup from JSON
+  const handleImportBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const json = JSON.parse(e.target?.result as string);
+        if (!json.geminiKeyStats && !json.queryTransactions) {
+          throw new Error("Arquivo de backup inválido. Chaves esperadas ausentes.");
+        }
+
+        const confirmRestore = window.confirm("Deseja realmente restaurar os dados de backup? Isso substituirá as métricas de tokens e o histórico de consultas atuais.");
+        if (!confirmRestore) return;
+
+        const res = await fetch("/api/admin/restore", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${adminPassword}`
+          },
+          body: JSON.stringify(json)
+        });
+
+        const result = await res.json();
+        if (res.ok) {
+          alert("Backup restaurado com sucesso! Estatísticas e Logs reimportados.");
+          fetchKeyStats();
+          fetchTransactions();
+        } else {
+          throw new Error(result.error || "Erro de servidor ao importar.");
+        }
+      } catch (err: any) {
+         alert("Falha ao restaurar backup: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+    // Clear input so same file can be selected again
+    event.target.value = "";
+  };
+
   useEffect(() => {
     if (activeAdminTab === "config") {
       fetchKeyStats();
-      const interval = setInterval(fetchKeyStats, 10000); // refresh every 10s
+      fetchTransactions();
+      const interval = setInterval(() => {
+        fetchKeyStats();
+        fetchTransactions();
+      }, 10000); // refresh both every 10s
       return () => clearInterval(interval);
     }
   }, [activeAdminTab]);
@@ -310,7 +423,8 @@ export default function App() {
           apiModel: apiModel,
           customGoogleSheetUrl: customGoogleSheetUrl,
           customGoogleSheetTabs: customGoogleSheetTabs,
-          clientSpreadsheets: spreadsheets
+          clientSpreadsheets: spreadsheets,
+          deviceSessionId: deviceSessionId
         })
       });
 
@@ -1216,6 +1330,216 @@ export default function App() {
                       )}
                     </div>
                   )}
+
+                  <hr className="border-[#241B3E]" />
+
+                  {/* Section 3: Backup & Restore to survive Vercel deploys */}
+                  <div className="space-y-4" id="backup-restore-panel">
+                    <div>
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <Database className="w-4 h-4 text-[#D946EF]" />
+                        Persistência de Dados (Evitar Perda no Vercel)
+                      </h3>
+                      <p className="text-xs text-zinc-400 mt-1">
+                        Como o Vercel possui um sistema de arquivos efêmero e somente-leitura, os dados locais de estatísticas de tokens são perdidos a cada novo deploy ou reinício do servidor. Use os controles abaixo para exportar um backup local das suas métricas antes de um deploy e restaurá-las logo em seguida!
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-[#0B0616] rounded-xl border border-[#241B3E]">
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wide">Exportar Estatísticas</h4>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                          Baixe um arquivo JSON com o estado consolidado de consumo de todas as chaves de API e o histórico recente de transações.
+                        </p>
+                        <button
+                          onClick={handleExportBackup}
+                          className="px-4 py-2 bg-[#1E1639] hover:bg-[#2A1F4E] border border-[#3E2D6B] text-[#D946EF] rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                        >
+                          <Download className="w-4 h-4" />
+                          Baixar Backup de Métricas (JSON)
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 border-t md:border-t-0 md:border-l border-[#241B3E] pt-4 md:pt-0 md:pl-4">
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wide">Importar / Restaurar Estatísticas</h4>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                          Selecione um arquivo de backup previamente exportado para recuperar e restaurar o contador de tokens no servidor.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <label className="px-4 py-2 bg-[#D946EF] hover:opacity-90 text-slate-950 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md">
+                            <Upload className="w-4 h-4" />
+                            Selecionar e Restaurar JSON
+                            <input
+                              type="file"
+                              accept=".json"
+                              onChange={handleImportBackup}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <hr className="border-[#241B3E]" />
+
+                  {/* Section 4: Detailed Transaction History & Individual Token Usage */}
+                  <div className="space-y-4" id="detailed-query-logs">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                          <History className="w-4 h-4 text-[#D946EF]" />
+                          Histórico de Consultas & Tokens Individuais
+                        </h3>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Consulte em tempo real o histórico detalhado das últimas consultas feitas pelos usuários (celulares diferentes que usam o app concorrentemente). Descubra o que foi perguntado e o uso exato de tokens e custo de cada pergunta individualmente de forma gratuita!
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={fetchTransactions}
+                        disabled={isLoadingTransactions}
+                        className="px-3 py-1.5 bg-[#1E1639] hover:bg-[#2A1F4E] border border-[#3E2D6B] text-[#D946EF] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0 self-end md:self-auto"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTransactions ? "animate-spin" : ""}`} />
+                        Atualizar Logs
+                      </button>
+                    </div>
+
+                    {/* Summary cards for transactions */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="bg-[#0B0616] border border-[#241B3E] p-3.5 rounded-xl space-y-1">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider block">Total de Consultas</span>
+                        <span className="text-lg font-extrabold text-white block">{queryTransactions.length}</span>
+                      </div>
+                      <div className="bg-[#0B0616] border border-[#241B3E] p-3.5 rounded-xl space-y-1">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider block">Tokens Consumidos</span>
+                        <span className="text-lg font-extrabold text-[#D946EF] block">
+                          {queryTransactions.reduce((acc, tx) => acc + (tx.totalTokens || 0), 0).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="bg-[#0B0616] border border-[#241B3E] p-3.5 rounded-xl space-y-1">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider block">Custo Estimado (BRL)</span>
+                        <span className="text-lg font-extrabold text-emerald-400 block">
+                          R$ {queryTransactions.reduce((acc, tx) => acc + (tx.estimatedCostBRL || 0), 0).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="bg-[#0B0616] border border-[#241B3E] p-3.5 rounded-xl space-y-1">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider block">Custo Estimado (USD)</span>
+                        <span className="text-lg font-extrabold text-zinc-300 block">
+                          $ {queryTransactions.reduce((acc, tx) => acc + (tx.estimatedCostUSD || 0), 0).toFixed(4)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Search filter input */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />
+                      <input
+                        type="text"
+                        placeholder="Filtrar por pergunta ou ID de dispositivo (ex: cel-abc)..."
+                        value={transactionSearchQuery}
+                        onChange={(e) => setTransactionSearchQuery(e.target.value)}
+                        className="w-full bg-[#0B0616] rounded-xl pl-9 pr-4 py-2 text-xs border border-[#241B3E] text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-[#D946EF] transition"
+                      />
+                    </div>
+
+                    {/* Transactions Log Table */}
+                    {queryTransactions.length === 0 ? (
+                      <div className="p-6 bg-[#0B0616] rounded-xl border border-[#241B3E] text-center">
+                        <p className="text-xs text-zinc-500 italic">
+                          Nenhuma consulta registrada no histórico ainda. Faça perguntas no chat para vê-las listadas aqui!
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-[#241B3E]/60 rounded-xl bg-[#0B0616]">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-[#241B3E] bg-[#120D23]/60 text-zinc-400 font-bold uppercase tracking-wider text-[10px]">
+                              <th className="p-3">Dispositivo</th>
+                              <th className="p-3">Data/Hora</th>
+                              <th className="p-3">Modelo</th>
+                              <th className="p-3">Tokens (In / Out)</th>
+                              <th className="p-3 text-right">Custo Estimado</th>
+                              <th className="p-3 text-center">Pergunta</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#241B3E]/40">
+                            {queryTransactions
+                              .filter(tx => {
+                                const term = transactionSearchQuery.toLowerCase();
+                                return (
+                                  (tx.userQuery || "").toLowerCase().includes(term) ||
+                                  (tx.deviceSessionId || "").toLowerCase().includes(term) ||
+                                  (tx.model || "").toLowerCase().includes(term)
+                                );
+                              })
+                              .map((tx) => {
+                                const isExpanded = expandedTransactionId === tx.id;
+                                const shortSessionId = tx.deviceSessionId.length > 15
+                                  ? `${tx.deviceSessionId.substring(0, 8)}...`
+                                  : tx.deviceSessionId;
+
+                                return (
+                                  <React.Fragment key={tx.id}>
+                                    <tr className="hover:bg-[#120D23]/30 transition text-zinc-300">
+                                      <td className="p-3 font-mono font-bold text-zinc-400">
+                                        <span className="bg-[#120D23] px-1.5 py-0.5 rounded border border-[#241B3E] text-pink-400 text-[10px]">
+                                          {shortSessionId}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-zinc-400 font-mono">
+                                        {new Date(tx.timestamp).toLocaleString("pt-BR", {
+                                          day: "2-digit",
+                                          month: "2-digit",
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                          second: "2-digit"
+                                        })}
+                                      </td>
+                                      <td className="p-3 font-mono text-zinc-400 text-[11px]">{tx.model}</td>
+                                      <td className="p-3 font-mono text-zinc-500">
+                                        <span className="text-zinc-300 font-semibold">{tx.promptTokens.toLocaleString()}</span>
+                                        <span className="mx-1">/</span>
+                                        <span className="text-zinc-400">{tx.candidatesTokens.toLocaleString()}</span>
+                                        <span className="block text-[9px] text-[#D946EF]">Total: {tx.totalTokens.toLocaleString()}</span>
+                                      </td>
+                                      <td className="p-3 text-right font-mono">
+                                        <span className="text-emerald-400 font-semibold block">R$ {tx.estimatedCostBRL.toFixed(5)}</span>
+                                        <span className="text-[10px] text-zinc-500 block">${tx.estimatedCostUSD.toFixed(5)}</span>
+                                      </td>
+                                      <td className="p-3 text-center">
+                                        <button
+                                          onClick={() => setExpandedTransactionId(isExpanded ? null : tx.id)}
+                                          className="px-2.5 py-1 bg-[#1E1639] border border-[#3E2D6B] hover:border-[#D946EF]/50 text-xs rounded-lg font-bold text-[#D946EF] cursor-pointer transition shadow-sm"
+                                        >
+                                          {isExpanded ? "Ocultar" : "Ver Pergunta"}
+                                        </button>
+                                      </td>
+                                    </tr>
+                                    {isExpanded && (
+                                      <tr>
+                                        <td colSpan={6} className="p-4 bg-[#0B0616]/80 border-t border-b border-[#241B3E]/60">
+                                          <div className="bg-[#120D23] rounded-xl p-4 border border-[#241B3E] space-y-2">
+                                            <div className="flex justify-between items-center text-[10px] uppercase font-bold tracking-wider text-zinc-500">
+                                              <span>ID Completo do Dispositivo: {tx.deviceSessionId}</span>
+                                              <span>Token Usage: In({tx.promptTokens}) + Out({tx.candidatesTokens}) = {tx.totalTokens}</span>
+                                            </div>
+                                            <div className="text-xs text-white leading-relaxed font-sans bg-black/20 p-3 rounded-lg border border-zinc-800/10 whitespace-pre-wrap">
+                                              {tx.userQuery}
+                                            </div>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
+                                );
+                              })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>
