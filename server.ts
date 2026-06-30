@@ -387,12 +387,11 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
     // Process private key to restore newline characters (common issue with Vercel env vars)
     privateKey = privateKey.replace(/\\n/g, "\n");
 
-    const auth = new google.auth.JWT(
-      clientEmail,
-      null,
-      privateKey,
-      ["https://www.googleapis.com/auth/spreadsheets"]
-    );
+    const auth = new google.auth.JWT({
+      email: clientEmail,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
 
     const sheets = google.sheets({ version: "v4", auth });
 
@@ -1351,5 +1350,3 @@ if (process.env.VERCEL !== "1") {
 }
 
 export default app;
-
-
