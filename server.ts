@@ -5,6 +5,7 @@ import fs from "fs";
 import * as XLSX from "xlsx";
 import { GoogleGenAI } from "@google/genai";
 import { google } from "googleapis";
+import { waitUntil } from "@vercel/functions";
 import { DEFAULT_SPREADSHEETS } from "./src/data/defaultSheets.js";
 
 // Load environment variables from .env
@@ -337,6 +338,7 @@ interface QueryTransaction {
   estimatedCostUSD: number;
   estimatedCostBRL: number;
   keyIndex: number;
+  sentToSheets?: boolean;
 }
 
 let queryTransactions: QueryTransaction[] = [];
@@ -348,6 +350,29 @@ function loadQueryTransactions() {
       if (Array.isArray(data)) {
         queryTransactions = data;
         console.log(`📂 [TRANSACTION PERSISTENCE] ${queryTransactions.length} transações de consulta carregadas do disco.`);
+        
+        // Find any unsent transactions and trigger their background sending
+        const unsent = queryTransactions.filter(tx => !tx.sentToSheets);
+        if (unsent.length > 0) {
+          console.log(`📥 [GOOGLE SHEETS] Encontradas ${unsent.length} transações pendentes de envio anterior. Retentando em segundo plano...`);
+          for (const tx of unsent) {
+            const loggingPromise = (async () => {
+              try {
+                await appendTransactionToGoogleSheets(tx);
+                tx.sentToSheets = true;
+                saveQueryTransactions();
+              } catch (err: any) {
+                console.error(`❌ [GOOGLE SHEETS LOG] Erro na retentativa automática da transação ${tx.id}:`, err.message || err);
+              }
+            })();
+            
+            if (process.env.VERCEL) {
+              try {
+                waitUntil(loggingPromise);
+              } catch (e) {}
+            }
+          }
+        }
       }
     }
   } catch (err) {
@@ -378,14 +403,12 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
       GOOGLE_PRIVATE_KEY: privateKey ? "Configurado ✅" : "AUSENTE ❌",
       GOOGLE_SHEETS_LOG_SPREADSHEET_ID: spreadsheetId ? "Configurado ✅" : "AUSENTE ❌"
     });
-    console.log("👉 Lembre-se: Após configurar as variáveis de ambiente no painel da Vercel, você PRECISA realizar um novo Deploy (Redeploy) para que as alterações tenham efeito.");
     return;
   }
 
   console.log(`⏳ [GOOGLE SHEETS LOG] Iniciando envio da transação ${tx.id} para a planilha: ${spreadsheetId}`);
 
   try {
-    // Process private key to restore newline characters (common issue with Vercel env vars)
     privateKey = privateKey.replace(/\\n/g, "\n");
 
     const auth = new google.auth.JWT({
@@ -396,47 +419,61 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
 
     const sheets = google.sheets({ version: "v4", auth });
 
-    // Try to read first row to check if headers are already written
-    let hasHeaders = false;
-    try {
-      const checkRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: "A1:B1",
-      });
-      if (checkRes.data.values && checkRes.data.values.length > 0) {
-        hasHeaders = true;
+    // 1. Check and write headers if not checked yet
+    if (!googleSheetsHeadersChecked) {
+      let hasHeaders = false;
+      try {
+        const checkRes = await retryWithBackoff(() => 
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: "A1:B1",
+          }),
+          3, 300, 2000
+        );
+        if (checkRes.data.values && checkRes.data.values.length > 0) {
+          hasHeaders = true;
+          googleSheetsHeadersChecked = true;
+        }
+      } catch (readErr: any) {
+        console.log(`ℹ️ [GOOGLE SHEETS LOG] Não foi possível ler cabeçalhos (pode ser planilha vazia ou ainda sem permissão): ${readErr.message || readErr}`);
       }
-    } catch (readErr: any) {
-      console.log(`ℹ️ [GOOGLE SHEETS LOG] Não foi possível ler cabeçalhos (pode ser planilha vazia): ${readErr.message || readErr}`);
+
+      if (!hasHeaders) {
+        console.log("📝 [GOOGLE SHEETS LOG] Escrevendo linha de cabeçalhos na planilha...");
+        const headers = [
+          "ID da Transação",
+          "Data/Hora (UTC)",
+          "ID da Sessão (Dispositivo)",
+          "Pergunta do Usuário",
+          "Resposta do Agente",
+          "Modelo Utilizado",
+          "Tokens de Entrada",
+          "Tokens de Saída",
+          "Total de Tokens",
+          "Custo Estimado (USD)",
+          "Custo Estimado (BRL)",
+          "Chave Utilizada"
+        ];
+        try {
+          await retryWithBackoff(() =>
+            sheets.spreadsheets.values.append({
+              spreadsheetId,
+              range: "A1",
+              valueInputOption: "USER_ENTERED",
+              requestBody: {
+                values: [headers],
+              },
+            }),
+            3, 300, 2000
+          );
+          googleSheetsHeadersChecked = true;
+        } catch (headerErr: any) {
+          console.error("❌ [GOOGLE SHEETS LOG] Falha ao escrever cabeçalhos:", headerErr.message || headerErr);
+        }
+      }
     }
 
-    if (!hasHeaders) {
-      console.log("📝 [GOOGLE SHEETS LOG] Escrevendo linha de cabeçalhos na planilha...");
-      const headers = [
-        "ID da Transação",
-        "Data/Hora (UTC)",
-        "ID da Sessão (Dispositivo)",
-        "Pergunta do Usuário",
-        "Resposta do Agente",
-        "Modelo Utilizado",
-        "Tokens de Entrada",
-        "Tokens de Saída",
-        "Total de Tokens",
-        "Custo Estimado (USD)",
-        "Custo Estimado (BRL)",
-        "Chave Utilizada"
-      ];
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: "A1",
-        valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [headers],
-        },
-      });
-    }
-
-    // Format row values nicely
+    // 2. Format row values nicely
     const row = [
       tx.id,
       tx.timestamp,
@@ -456,36 +493,109 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
           : "Outro Provedor"
     ];
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: "A:L",
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [row],
-      },
-    });
+    // 3. Append row using retryWithBackoff (5 retries)
+    await retryWithBackoff(() =>
+      sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: "A:L",
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [row],
+        },
+      }),
+      5, 500, 8000
+    );
 
     console.log(`✅ [GOOGLE SHEETS LOG] Transação ${tx.id} enviada para a planilha com sucesso.`);
   } catch (err: any) {
-    console.error("❌ [GOOGLE SHEETS LOG] Falha ao enviar transação para o Google Sheets:", err.message || err);
-    console.error("💡 Dica: Verifique se o e-mail da conta de serviço está como editor na planilha e se a chave privada está correta.");
+    console.error("❌ [GOOGLE SHEETS LOG] Falha final ao enviar transação para o Google Sheets após tentativas:", err.message || err);
+    throw err;
   }
 }
 
-let sheetsQueue: Promise<void> = Promise.resolve();
+let googleSheetsHeadersChecked = false;
 
-function registerQueryTransaction(tx: QueryTransaction) {
-  queryTransactions.push(tx);
-  saveQueryTransactions();
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  retries = 5,
+  delay = 500,
+  maxDelay = 8000
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const status = error.status || error.code;
+    const errMsg = (error.message || "").toLowerCase();
+    const isRateLimit = status === 429 || 
+                        errMsg.includes("429") || 
+                        errMsg.includes("rate limit") || 
+                        errMsg.includes("quota") || 
+                        errMsg.includes("exhausted");
+    
+    if (retries <= 0) {
+      throw error;
+    }
+    
+    const shouldRetry = isRateLimit || !status || status >= 500 || status === 408;
+    if (!shouldRetry) {
+      throw error;
+    }
+    
+    const jitter = Math.random() * 200;
+    const nextDelay = Math.min(delay * 2 + jitter, maxDelay);
+    
+    console.warn(`⚠️ [GOOGLE SHEETS LOG] Falha temporária (Status: ${status || 'conexão'}). Retentando em ${Math.round(nextDelay)}ms... Tentativas restantes: ${retries}. Erro: ${error.message || error}`);
+    
+    await new Promise((resolve) => setTimeout(resolve, nextDelay));
+    return retryWithBackoff(fn, retries - 1, nextDelay, maxDelay);
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage = "Timeout exceeded"): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, ms);
+    
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+function registerQueryTransaction(tx: QueryTransaction): void {
+  // Initialize sentToSheets as false
+  tx.sentToSheets = false;
   
-  // Enfileirar os envios para o Google Sheets sequencialmente para evitar conflitos de concorrência e rate limiting
-  sheetsQueue = sheetsQueue
-    .then(async () => {
-      await appendTransactionToGoogleSheets(tx);
-    })
-    .catch(err => {
-      console.error(`❌ [GOOGLE SHEETS LOG] Erro na fila do Google Sheets para transação ${tx.id}:`, err.message || err);
-    });
+  queryTransactions.push(tx);
+  saveQueryTransactions(); // Instantly write to disk (extremely fast)
+  
+  // Create a self-contained promise to log to Google Sheets asynchronously
+  const loggingPromise = (async () => {
+    try {
+      // Attempt sending with a 10s timeout to prevent locking up on a frozen request
+      await withTimeout(appendTransactionToGoogleSheets(tx), 10000, "Google Sheets API timed out (10s)");
+      tx.sentToSheets = true;
+      saveQueryTransactions();
+    } catch (err: any) {
+      console.error(`❌ [GOOGLE SHEETS LOG] Erro ao registrar transação ${tx.id} no Google Sheets em segundo plano:`, err.message || err);
+    }
+  })();
+
+  // If running in Vercel environment, register with waitUntil to keep the Lambda CPU alive after response is sent
+  if (process.env.VERCEL) {
+    try {
+      waitUntil(loggingPromise);
+    } catch (e) {
+      console.warn("⚠️ [BACKGROUND TASK] Falha ao registrar com Vercel waitUntil:", e);
+    }
+  }
 }
 
 // Cost calculation utility based on official API pricing per 1M tokens
