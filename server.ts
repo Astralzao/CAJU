@@ -1067,6 +1067,17 @@ app.post("/api/chat", async (req: Request, res: Response) => {
           shouldResetHistory = true;
           actualHistory = [];
           console.log(`⚠️ Limite de 3 perguntas consecutivas de continuação atingido. Resetando histórico da sessão para evitar alucinações.`);
+          
+          const resetReply = `⚠️ **Contexto Encerrado**
+
+Este histórico de conversação foi reiniciado automaticamente porque atingimos o limite de **3 perguntas consecutivas de continuação**.
+
+Para garantir a precisão total das informações e evitar que contextos misturados causem respostas incorretas ou alucinações de dados, o chat foi reiniciado.
+
+👉 **Por favor, reformule a sua pergunta como uma nova mensagem**, fornecendo todos os detalhes necessários de forma direta (iniciando o assunto do zero).`;
+          
+          res.json({ reply: resetReply, resetHistory: true });
+          return;
         }
       }
 
@@ -1835,10 +1846,6 @@ Você DEVE obrigatoriamente, prioritariamente e proativamente consultar e basear
           keyIndex: -2 // Other provider code
         });
       }
-    }
-
-    if (shouldResetHistory) {
-      reply = `[REINÍCIO DE CONTEXTO]\nEste chat foi reiniciado automaticamente porque atingimos o limite de 3 perguntas consecutivas com base no histórico anterior. Isso evita alucinações e garante que novas consultas sejam 100% precisas em relação aos dados atuais.\n\n${reply}`;
     }
 
     res.json({ reply, resetHistory: shouldResetHistory });
