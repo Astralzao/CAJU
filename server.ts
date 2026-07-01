@@ -1037,12 +1037,105 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         return term.length > 2;
       });
 
+    // Helper to detect if a message is asking about risks or contingency plans for Operação e Experiência
+    const isRiskOpMessage = (text: string): boolean => {
+      const normalized = text.toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+      const riskKeywords = [
+        "falta de internet", "sem internet", "conexao", "rede", "wi-fi", "wifi", "sinal",
+        "quebrar", "quebrado", "danificar", "danificado", "aparelho", "celular",
+        "falta de responsabilidade", "perda do aparelho", "perder o aparelho", "sumir o aparelho",
+        "ma comunicacao", "falha de comunicacao", "comunicacao", "radio", "communicacao",
+        "reacao alergica", "alergia", "alergica", "intolerancia",
+        "contaminacao", "contaminacao da comida", "comida contaminada", "comida estragada",
+        "faltar comida", "comida acabou", "sem comida", "falta de comida",
+        "fila", "filas", "desorganizada", "desorganizadas", "fila gigante", "fila grande", "filas grandes",
+        "acidente", "acidentes", "machucou", "feriu", "ferido", "queda", "caiu",
+        "plano de evacuacao", "evacuacao", "evacuar", "incendio", "fogo", "saida de emergencia",
+        "clima", "chuva", "tempestade", "ma estrutura", "estrutura", "interrupcoes", "interrupcao",
+        "excesso de bebida", "bebado", "alcool", "embriagado", "bebeu demais",
+        "som", "problema com som", "microfone", "caixa de som", "ruido", "problemas de som",
+        "seguranca", "problema com seguranca", "briga", "furto", "roubo", "invasao",
+        "esquecer itens", "esquecer ficha", "fichas dos produtos", "sem ficha", "esqueci",
+        "logistica", "logistica de transporte", "transporte dos itens", "levar os itens", "carregar itens",
+        "maquininha", "maquina", "cartao", "credito", "debito", "pagamento",
+        "time da lojinha", "time da barinha", "precos distintos", "preço diferente", "preços diferentes", "valores da lojinha", "valores da barinha", "desalinhado",
+        "parceiros", "controle dos itens", "retirados", "itens de negocio", "institucionais",
+        "pre-venda", "pre venda", "nao separacao", "mistura dos itens", "mistura de itens",
+        "mal-estar", "mal estar", "desidratacao", "desidratado", "intoxicacao", "intoxicado", "atendimento medico", "medico", "enfermaria", "ambulancia", "socorro",
+        "remedio", "remedios", "remedio pessoal", "remedios pessoais"
+      ];
+
+      return riskKeywords.some(keyword => {
+        const normKeyword = keyword.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        return normalized.includes(normKeyword);
+      });
+    };
+
+    // Helper to detect if a message is asking about risks or contingency plans for Infra e Logística
+    const isRiskInfraMessage = (text: string): boolean => {
+      const normalized = text.toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+      const riskKeywords = [
+        "combustivel", "gerador", "hotel", "gerador de energia", "faltar combustivel",
+        "quebrar", "quebrado", "danificar", "danificado",
+        "tecnico", "sem tecnico", "consertar", "reparo", "reparar",
+        "piscina", "supervisao", "piscina sem supervisao",
+        "acidente", "acidentes", "machucou", "feriu", "ferido", "queda", "caiu",
+        "queda de energia", "falta de energia", "sem luz", "apagao",
+        "falta de agua", "sem agua", "abastecimento",
+        "banheiro", "banheiro nao funcional", "banheiro quebrado", "banheiro entupido",
+        "sistema de som", "sistema de luz", "som e luz", "fora do ar",
+        "ar condicionado", "ar-condicionado", "quente", "sem ar", "ar quebrado", "funcionamento do ar",
+        "danos ao espaco", "danos ao espaco fisico", "vandalismo", "quebrar o espaco",
+        "limpeza", "falta de limpeza", "sujo", "sujeira", "lixo",
+        "falta de internet", "sem internet", "wifi", "wi-fi",
+        "iluminacao", "ma iluminacao", "escuro", "escuridao",
+        "incendio", "fogo", "combate ao incendio", "extintor", "extintores",
+        "onibus", "onibus quebrar", "van", "micro-onibus", "microonibus",
+        "lista de passageiros", "passageiros", "passageiro", "checar lista",
+        "atraso", "atrasado", "atrasar", "demorar", "demora",
+        "assalto", "assaltado", "roubo", "roubado", "furto", "acidente",
+        "chuva", "alagamento", "alagamentos", "inundacao", "tempestade"
+      ];
+
+      return riskKeywords.some(keyword => {
+        const normKeyword = keyword.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        return normalized.includes(normKeyword);
+      });
+    };
+
+    const isRiskOp = isRiskOpMessage(combinedTextForSearch);
+    const isRiskInfra = isRiskInfraMessage(combinedTextForSearch);
+
     // 2. Format Sheet Data for the prompt context with smart filtering (RAG)
     let sheetsContextText = "";
     if (sheets && Array.isArray(sheets) && sheets.length > 0) {
       sheetsContextText = "--- DADOS DAS PLANILHAS ALIMENTADAS (Filtrados por relevância para economizar limite de tokens) ---\n\n";
 
       sheets.forEach((sheet: any) => {
+        const sheetNameLower = (sheet.name || "").toLowerCase();
+        const rawFileNameLower = (sheet.rawFileName || "").toLowerCase();
+        
+        // Operação e Experiência match
+        const isRiskOpSheet = (sheetNameLower.includes("risco") && (sheetNameLower.includes("operacao") || sheetNameLower.includes("experiencia"))) ||
+                              (rawFileNameLower.includes("risco") && (rawFileNameLower.includes("operacao") || rawFileNameLower.includes("experiencia")));
+        
+        // Infra e Logística match
+        const isRiskInfraSheet = (sheetNameLower.includes("risco") && (sheetNameLower.includes("infra") || sheetNameLower.includes("logistica"))) ||
+                                 (rawFileNameLower.includes("risco") && (rawFileNameLower.includes("infra") || rawFileNameLower.includes("logistica")));
+        
+        // General risk fallback (just in case)
+        const isGeneralRiskSheet = sheetNameLower.includes("risco") || rawFileNameLower.includes("risco");
+
+        const isForceRiskLoad = (isRiskOp && isRiskOpSheet) || 
+                                (isRiskInfra && isRiskInfraSheet) ||
+                                ((isRiskOp || isRiskInfra) && isGeneralRiskSheet && !isRiskOpSheet && !isRiskInfraSheet);
+
         sheetsContextText += `PLANILHA: "${sheet.name}" (Arquivo original: ${sheet.rawFileName || "Nulo"})\n`;
         if (sheet.tabs && Array.isArray(sheet.tabs)) {
           sheet.tabs.forEach((tab: any) => {
@@ -1062,12 +1155,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
               const tabNameLower = (tab.name || "").toLowerCase();
               const normalizedTabName = normalizeText(tab.name || "");
-              const isTabTargeted = searchTerms.some((term: string) => {
+              let isTabTargeted = searchTerms.some((term: string) => {
                 const normTerm = normalizeText(term);
                 return normTerm.length > 2 && (normalizedTabName.includes(normTerm) || normTerm.includes(normalizedTabName));
               });
 
-              const isCriticalTab = isTabTargeted ||
+              if (isForceRiskLoad) {
+                isTabTargeted = true;
+              }
+
+              let isCriticalTab = isTabTargeted ||
                                     tabNameLower.includes("embaixador") || 
                                     tabNameLower.includes("contato") || 
                                     tabNameLower.includes("palestrante") || 
@@ -1082,6 +1179,10 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                     tabNameLower.includes("quarto") ||
                                     tabNameLower.includes("hospedagem");
 
+              if (isForceRiskLoad) {
+                isCriticalTab = true;
+              }
+
               const isTransferTab = tabNameLower.includes("transfer") || 
                                     (userMessageLower.includes("transfer") && 
                                      (tabNameLower.includes("transporte") || 
@@ -1090,7 +1191,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                                       tabNameLower.includes("chegada") || 
                                       tabNameLower.includes("partida")));
 
-              if (isTransferTab) {
+              if (isForceRiskLoad) {
+                rows.forEach((row: any, idx: number) => {
+                  const rowCells = headers.map((h: string) => `${row[h] !== undefined ? row[h] : ""}`);
+                  sheetsContextText += `    [INTEGRAL-RISCO ${idx + 1}] ${rowCells.join(" | ")}\n`;
+                  includedCount++;
+                });
+                sheetsContextText += `    (ATENÇÃO: os dados de RISCO da aba "${tab.name}" foram fornecidos de forma 100% INTEGRAL proativamente devido à detecção de risco de Operação/Experiência ou Infra/Logística.)\n`;
+              } else if (isTransferTab) {
                 let matchedCount = 0;
                 rows.forEach((row: any, idx: number) => {
                   const rowCellsText = headers.map((h: string) => {
@@ -1133,10 +1241,10 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                   }
                 });
 
-                const isSmallTargeted = isTabTargeted && rows.length <= 80;
+                const isSmallTargeted = isTabTargeted && rows.length <= 150;
 
                 if (isSmallTargeted) {
-                  // Se a aba for explicitamente mencionada/visada na pergunta e for pequena (até 80 linhas),
+                  // Se a aba for explicitamente mencionada/visada na pergunta e for pequena (até 150 linhas),
                   // enviamos 100% dos dados para precisão analítica absoluta.
                   let matchedCount = 0;
                   rows.forEach((row: any, idx: number) => {
@@ -1276,6 +1384,66 @@ DIRETRIZES DE RESPOSTA (ORDENS DIRETAS):
 - NÃO use asteriscos (* ou **) para negrito/itálico.
 - NÃO use hashtags (#, ##, ###) para títulos. Use apenas LETRAS MAIÚSCULAS para títulos de destaque (ex: "PASSO 1: ISOLAMENTO").
 - NÃO use barras verticais (|) ou múltiplos hífens/iguais (---, ===) para tabelas ou divisores. Use listas textuais simples, hífens comuns (-) ou números normais para tópicos, e quebras de linha duplas para parágrafos.
+
+7. PLANILHA DE RISCOS - OPERAÇÃO E EXPERIÊNCIA:
+Se o usuário perguntar sobre qualquer uma das seguintes situações, problemas ou riscos:
+- Falta de internet
+- Quebrar ou já estar quebrado
+- Falta de responsabilidade com o aparelho
+- Má comunicação
+- Reação alérgica
+- Contaminação da comida (física, química e biológica)
+- Faltar comida
+- Filas desorganizadas
+- Acidentes
+- Ausência de plano de evacuação em casos de emergência
+- Interrupções por clima ou má estrutura
+- Excesso de bebida
+- Problemas com som
+- Problemas com segurança
+- Esquecer itens e as fichas dos produtos
+- Logística de transporte dos itens para o evento
+- Maquininha ou o celular para pagamento com cartão (crédito e débito)
+- Time da lojinha/barinha desalinhado com os valores da lojinha/barinha (vendendo com preços distintos)
+- Controle dos itens retirados para parceiros (itens de negócio ou institucionais) - se necessário
+- Não separação (ou mistura) dos itens da pré-venda (insatisfação do pessoal)
+- Casos de mal-estar, desidratação, intoxicação alimentar ou acidentes que exijam atendimento médico
+- Esquecer itens necessários (remédios pessoais)
+
+Você DEVE obrigatoriamente, prioritariamente e proativamente consultar e basear sua resposta nas informações e planos da PLANILHA DE RISCOS - OPERAÇÃO E EXPERIÊNCIA (disponibilizada no contexto). Cite a planilha e a respectiva aba para que o usuário saiba que essa fonte oficial foi consultada.
+
+8. PLANILHA DE RISCOS - INFRA E LOGÍSTICA:
+Se o usuário perguntar sobre qualquer uma das seguintes situações, problemas ou riscos:
+- Faltar combustível (gerador de energia do hotel)
+- Quebrar
+- Não ter técnico para consertar
+- Uso da piscina sem supervisão
+- Acidentes
+- Queda de energia
+- Falta de água
+- Banheiro não funcional
+- Sistema de som e luz fora do ar
+- Mau ou nenhum funcionamento do ar condicionado
+- Danos ao espaço físico
+- Falta de limpeza
+- Falta de internet
+- Má iluminação causando acidentes e insegurança
+- Incêndio e/ou falta de equipamento para combate ao incêndio
+- Ônibus quebrar
+- Não checar lista de passageiros
+- Atraso
+- Assalto/Acidente
+- Chuva e alagamentos
+
+Você DEVE obrigatoriamente, prioritariamente e proativamente consultar e basear sua resposta nas informações e planos da PLANILHA DE RISCOS - INFRA E LOGÍSTICA (disponibilizada no contexto). Cite a planilha e a respectiva aba para que o usuário saiba que essa fonte oficial foi consultada.
+
+9. SITUAÇÕES FORA DO ESCOPO DAS PLANILHAS DE RISCOS E PREVENÇÃO DE ALUCINAÇÃO:
+- Para quaisquer situações narradas ou incidentes operacionais/problemas delicados que fiquem fora do escopo de ambas as planilhas de riscos (e demais tabelas da base de dados), SOMENTE aí você deve agir de forma puramente consultiva.
+- Nessas respostas consultivas, você deve conciliar o seu próprio termômetro de inteligência com as metodologias de mitigação e o mesmo padrão de rigor analítico das planilhas de riscos originais (mantendo ações locais pragmáticas, claras e de campo).
+- REGRAS CRÍTICAS DE NÃO-ALUCINAÇÃO (NUNCA INVENTE DADOS OU INFORMAÇÕES):
+  1. Se for uma consulta factual de informações do evento (por exemplo: "que horas começa a segunda festa?", "qual é o local de tal atividade?", "quem é o palestrante da palestra X?") e NÃO houver uma resposta ou informação explícita nas planilhas ou base de dados disponibilizadas, você DEVE obrigatoriamente informar que não sabe ou não tem essa informação ("não encontrei algo a respeito nas planilhas oficiais").
+  2. NUNCA invente, presuma ou alucine datas, horários, nomes, locais ou dados concretos que não existam na base de dados fornecida.
+  3. Seja consultivo apenas para aconselhamento tático, preventivo e mitigações metodológicas diante de incidentes/situações narradas. Se for uma pergunta sobre dados específicos do evento que não existam no contexto, declare honestamente que a informação não foi encontrada.
 `;
 
     // 3. Prepare Chat Prompt / Contents based on Provider
