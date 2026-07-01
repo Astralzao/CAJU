@@ -472,12 +472,20 @@ async function appendTransactionToGoogleSheets(tx: QueryTransaction) {
   }
 }
 
+let sheetsQueue: Promise<void> = Promise.resolve();
+
 function registerQueryTransaction(tx: QueryTransaction) {
   queryTransactions.push(tx);
   saveQueryTransactions();
-  appendTransactionToGoogleSheets(tx).catch(err => {
-    console.error("❌ [GOOGLE SHEETS LOG] Erro assíncrono na rotina do Google Sheets:", err);
-  });
+  
+  // Enfileirar os envios para o Google Sheets sequencialmente para evitar conflitos de concorrência e rate limiting
+  sheetsQueue = sheetsQueue
+    .then(async () => {
+      await appendTransactionToGoogleSheets(tx);
+    })
+    .catch(err => {
+      console.error(`❌ [GOOGLE SHEETS LOG] Erro na fila do Google Sheets para transação ${tx.id}:`, err.message || err);
+    });
 }
 
 // Cost calculation utility based on official API pricing per 1M tokens

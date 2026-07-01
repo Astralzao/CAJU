@@ -447,6 +447,10 @@ export default function App() {
       if (data.resetHistory) {
         setActiveHistoryIndex(newMessages.length + 1);
       }
+
+      // Immediately refresh stats and logs/transactions to prevent lag
+      fetchTransactions();
+      fetchKeyStats();
     } catch (err: any) {
       console.error("Erro na comunicação com a API:", err);
       setErrorMessage(
@@ -459,96 +463,7 @@ export default function App() {
 
   // Suggested Prompts based on available spreadsheets in App.tsx
   const getDynamicSuggestions = () => {
-    if (!spreadsheets || spreadsheets.length === 0) {
-      return [
-        { text: "Quais planilhas estão disponíveis e como posso carregá-las?", display: "📂 Como carregar planilhas?" },
-        { text: "Como sincronizar uma planilha do Google Sheets?", display: "🔗 Sincronizar Google Sheets" },
-        { text: "Quais as diretrizes de resposta para incidentes?", display: "🚨 Diretrizes de incidentes" }
-      ];
-    }
-
-    const suggestions: Array<{ text: string; display: string }> = [];
-
-    // Loop through spreadsheets and tabs to find relevant headers and rows
-    for (const sheet of spreadsheets) {
-      for (const tab of sheet.tabs) {
-        if (tab.rows && tab.rows.length > 0) {
-          const headers = tab.headers.map(h => h.toLowerCase().trim());
-          
-          // 1. Look for Contact/Member lists (Categorical suggestion)
-          const nameIdx = headers.findIndex(h => h.includes("nome") || h.includes("conselheiro") || h.includes("embaixador") || h.includes("ej") || h.includes("empresa"));
-          
-          if (nameIdx !== -1) {
-            suggestions.push({
-              text: `Quais contatos e integrantes estão registrados na aba "${tab.name}"?`,
-              display: `📞 Contatos de ${tab.name}`
-            });
-          }
-
-          // 2. Look for Procedures/Incidents
-          const probIdx = headers.findIndex(h => h.includes("situa") || h.includes("problema") || h.includes("incidente") || h.includes("emerg") || h.includes("caso") || h.includes("ocorr"));
-          if (probIdx !== -1 && tab.rows[0]) {
-            const row = tab.rows[0];
-            const probCol = tab.headers[probIdx];
-            const probValue = String(row[probCol] || "").trim();
-            if (probValue && probValue.length > 3 && probValue.length < 80) {
-              const shortProb = probValue.length > 25 ? probValue.substring(0, 22) + "..." : probValue;
-              suggestions.push({
-                text: `O que fazer em caso de: "${probValue}"?`,
-                display: `🚨 Caso: "${shortProb}"`
-              });
-            }
-          }
-          
-          // 3. Look for Location/Role info
-          const locIdx = headers.findIndex(h => h.includes("local") || h.includes("sala") || h.includes("pavilhao") || h.includes("setor"));
-          if (locIdx !== -1 && tab.rows[0]) {
-            const row = tab.rows[0];
-            const locCol = tab.headers[locIdx];
-            const locValue = String(row[locCol] || "").trim();
-            if (locValue && locValue.length < 55) {
-              suggestions.push({
-                text: `Quais atividades ou contatos estão alocados no setor/local ${locValue}?`,
-                display: `📍 Setor: ${locValue}`
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // 4. Fallback based on Sheet names
-    if (suggestions.length < 3) {
-      for (const sheet of spreadsheets) {
-        suggestions.push({
-          text: `Quais informações estão registradas na planilha "${sheet.name}"?`,
-          display: `📊 Planilha: ${sheet.name}`
-        });
-        if (sheet.tabs.length > 0) {
-          suggestions.push({
-            text: `Faça um resumo dos dados encontrados na aba "${sheet.tabs[0].name}" de "${sheet.name}".`,
-            display: `📋 Aba: ${sheet.tabs[0].name}`
-          });
-        }
-      }
-    }
-
-    // Filter duplicates by text
-    const seen = new Set<string>();
-    const uniqueSuggestions = suggestions.filter(item => {
-      if (seen.has(item.text)) return false;
-      seen.add(item.text);
-      return true;
-    });
-    
-    // Final fallback to guarantee 3 items
-    if (uniqueSuggestions.length < 3) {
-      uniqueSuggestions.push({ text: "Faça um resumo geral de quem trabalha em cada setor.", display: "👥 Resumo de Setores" });
-      uniqueSuggestions.push({ text: "Como entrar em contato com os embaixadores do evento?", display: "📞 Embaixadores" });
-      uniqueSuggestions.push({ text: "Quais são as colunas de dados registradas nas planilhas ativas?", display: "📊 Estrutura de Tabelas" });
-    }
-
-    return uniqueSuggestions.slice(0, 3);
+    return [];
   };
 
   // Aggregated Statistics
@@ -603,17 +518,19 @@ export default function App() {
                   Consulte informações operacionais, horários de plantão, contatos de conselheiros e rotas médicas instantaneamente de forma segura.
                 </p>
               </div>
-              <div className="flex flex-col gap-2 w-full pt-2">
-                {getDynamicSuggestions().map((sug, i) => (
-                  <button 
-                    key={i}
-                    onClick={() => handleSendMessage(sug.text)}
-                    className="w-full text-left p-2.5 sm:p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-[11px] sm:text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
-                  >
-                    {sug.display}
-                  </button>
-                ))}
-              </div>
+              {getDynamicSuggestions().length > 0 && (
+                <div className="flex flex-col gap-2 w-full pt-2">
+                  {getDynamicSuggestions().map((sug, i) => (
+                    <button 
+                      key={i}
+                      onClick={() => handleSendMessage(sug.text)}
+                      className="w-full text-left p-2.5 sm:p-3 rounded-xl bg-[#120D23] border border-[#241B3E] hover:border-[#D946EF]/30 text-[11px] sm:text-xs text-zinc-300 hover:text-[#D946EF] transition cursor-pointer"
+                    >
+                      {sug.display}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             messages.map((msg) => (
@@ -1701,17 +1618,19 @@ export default function App() {
                       Pergunte sobre procedimentos de saúde, regras operacionais, ou plantão de conselheiros indexados nas planilhas.
                     </p>
                   </div>
-                  <div className="flex flex-col gap-1.5 w-full pt-2">
-                    {getDynamicSuggestions().map((sug, i) => (
-                      <button 
-                        key={i}
-                        onClick={() => handleSendMessage(sug.text)}
-                        className="w-full text-left p-2.5 rounded-lg bg-[#0B0616] border border-[#241B3E] text-[11px] text-zinc-300 hover:text-[#D946EF] hover:border-[#D946EF]/30 transition cursor-pointer"
-                      >
-                        {sug.display}
-                      </button>
-                    ))}
-                  </div>
+                  {getDynamicSuggestions().length > 0 && (
+                    <div className="flex flex-col gap-1.5 w-full pt-2">
+                      {getDynamicSuggestions().map((sug, i) => (
+                        <button 
+                          key={i}
+                          onClick={() => handleSendMessage(sug.text)}
+                          className="w-full text-left p-2.5 rounded-lg bg-[#0B0616] border border-[#241B3E] text-[11px] text-zinc-300 hover:text-[#D946EF] hover:border-[#D946EF]/30 transition cursor-pointer"
+                        >
+                          {sug.display}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 messages.map((msg) => (

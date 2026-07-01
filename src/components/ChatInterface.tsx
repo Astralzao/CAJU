@@ -30,75 +30,7 @@ export default function ChatInterface({
 
   // Suggested Prompts based on available spreadsheets
   const getSuggestions = () => {
-    if (!spreadsheets || spreadsheets.length === 0) {
-      return [
-        "Quais planilhas estão disponíveis e como posso carregá-las?",
-        "Como configurar e sincronizar uma planilha do Google Sheets?",
-        "Quais são as diretrizes de resposta para incidentes operacionais?"
-      ];
-    }
-
-    const suggestions: string[] = [];
-
-    // Loop through spreadsheets and tabs to find relevant headers and rows
-    for (const sheet of spreadsheets) {
-      for (const tab of sheet.tabs) {
-        if (tab.rows && tab.rows.length > 0) {
-          const headers = tab.headers.map(h => h.toLowerCase().trim());
-          
-          // 1. Look for Contact/Member lists (Categorical suggestion)
-          const nameIdx = headers.findIndex(h => h.includes("nome") || h.includes("conselheiro") || h.includes("embaixador") || h.includes("ej") || h.includes("empresa"));
-          
-          if (nameIdx !== -1) {
-            suggestions.push(`Quais contatos e integrantes estão registrados na aba "${tab.name}"?`);
-          }
-
-          // 2. Look for Procedures/Incidents
-          const probIdx = headers.findIndex(h => h.includes("situa") || h.includes("problema") || h.includes("incidente") || h.includes("emerg") || h.includes("caso") || h.includes("ocorr"));
-          if (probIdx !== -1 && tab.rows[0]) {
-            const row = tab.rows[0];
-            const probCol = tab.headers[probIdx];
-            const probValue = String(row[probCol] || "").trim();
-            if (probValue && probValue.length > 3 && probValue.length < 80) {
-              suggestions.push(`O que fazer em caso de: "${probValue}"?`);
-            }
-          }
-          
-          // 3. Look for Location/Role info
-          const locIdx = headers.findIndex(h => h.includes("local") || h.includes("sala") || h.includes("pavilhao") || h.includes("setor"));
-          if (locIdx !== -1 && tab.rows[0]) {
-            const row = tab.rows[0];
-            const locCol = tab.headers[locIdx];
-            const locValue = String(row[locCol] || "").trim();
-            if (locValue && locValue.length < 55) {
-              suggestions.push(`Quais atividades ou contatos estão alocados no setor/local ${locValue}?`);
-            }
-          }
-        }
-      }
-    }
-
-    // 4. Fallback based on Sheet names
-    if (suggestions.length < 3) {
-      for (const sheet of spreadsheets) {
-        suggestions.push(`Quais informações estão registradas na planilha "${sheet.name}"?`);
-        if (sheet.tabs.length > 0) {
-          suggestions.push(`Faça um resumo dos dados encontrados na aba "${sheet.tabs[0].name}" de "${sheet.name}".`);
-        }
-      }
-    }
-
-    // Remove duplicates and slice to 3
-    const uniqueSuggestions = Array.from(new Set(suggestions)).filter(Boolean);
-    
-    // Final fallback to guarantee 3 items
-    if (uniqueSuggestions.length < 3) {
-      uniqueSuggestions.push("Faça um resumo geral de quem trabalha em cada setor.");
-      uniqueSuggestions.push("Como entrar em contato com os embaixadores do evento?");
-      uniqueSuggestions.push("Quais são as colunas de dados registradas nas planilhas ativas?");
-    }
-
-    return uniqueSuggestions.slice(0, 3);
+    return [];
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -155,22 +87,24 @@ export default function ChatInterface({
             </div>
 
             {/* Suggestions cards */}
-            <div className="w-full space-y-2 pt-2" id="chat-suggestions-list">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">
-                Sugestões de Perguntas
-              </p>
-              {getSuggestions().map((sug, i) => (
-                <button
-                  id={`suggestion-btn-${i}`}
-                  key={i}
-                  onClick={() => handleSuggestionClick(sug)}
-                  className="w-full text-left text-xs text-slate-700 bg-white border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/10 p-3 rounded-xl flex items-center justify-between group transition duration-200 cursor-pointer"
-                >
-                  <span className="font-medium line-clamp-1">{sug}</span>
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500 group-hover:translate-x-0.5 transition shrink-0 ml-1.5" />
-                </button>
-              ))}
-            </div>
+            {getSuggestions().length > 0 && (
+              <div className="w-full space-y-2 pt-2" id="chat-suggestions-list">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">
+                  Sugestões de Perguntas
+                </p>
+                {getSuggestions().map((sug, i) => (
+                  <button
+                    id={`suggestion-btn-${i}`}
+                    key={i}
+                    onClick={() => handleSuggestionClick(sug)}
+                    className="w-full text-left text-xs text-slate-700 bg-white border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/10 p-3 rounded-xl flex items-center justify-between group transition duration-200 cursor-pointer"
+                  >
+                    <span className="font-medium line-clamp-1">{sug}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500 group-hover:translate-x-0.5 transition shrink-0 ml-1.5" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-4" id="messages-list">
